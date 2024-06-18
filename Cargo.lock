@@ -1438,6 +1438,7 @@ dependencies = [
  "chrono",
  "enumflags2",
  "glib 0.20.0 (git+https://github.com/gtk-rs/gtk-rs-core)",
+ "glib-macros 0.20.0 (git+https://github.com/gtk-rs/gtk-rs-core)",
  "gst-plugin-version-helper",
  "gstreamer",
  "gstreamer-base",

@@ -50,11 +50,11 @@ const PROPERTY_NAME_END_UTC: &str = "end-utc";
 const PROPERTY_NAME_ALLOW_CREATE_SCOPE: &str = "allow-create-scope";
 const PROPERTY_NAME_KEYCLOAK_FILE: &str = "keycloak-file";
 
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::GEnum)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::Enum)]
 #[repr(u32)]
-#[genum(type_name = "GstStartMode")]
+#[enum_type(name = "GstStartMode")]
 pub enum StartMode {
-    #[genum(
+    #[enum_value(
         name = "This element will not initiate a seek when starting. \
                 It will begin reading from the first available buffer in the stream. \
                 It will not use the index and it will not set the segment times. \
@@ -63,24 +63,24 @@ pub enum StartMode {
         nick = "no-seek"
     )]
     NoSeek = 0,
-    #[genum(
+    #[enum_value(
         name = "Start at the earliest available random-access point.",
         nick = "earliest"
     )]
     Earliest = 1,
-    #[genum(
+    #[enum_value(
         name = "Start at the most recent random-access point.",
         nick = "latest"
     )]
     Latest = 2,
-    #[genum(
+    #[enum_value(
         name = "Start at the random-access point on or immediately before \
                 the specified start-timestamp or start-utc. \
                 The segment will start at the random-access point.",
         nick = "timestamp"
     )]
     Timestamp = 3,
-    #[genum(
+    #[enum_value(
         name = "Start at the random-access point on or immediately before \
                 the specified start-timestamp or start-utc. \
                 The segment will start at the specified timestamp. \
@@ -91,28 +91,28 @@ pub enum StartMode {
     TimestampExact = 4,
 }
 
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::GEnum)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::Enum)]
 #[repr(u32)]
-#[genum(type_name = "GstEndMode")]
+#[enum_type(name = "GstEndMode")]
 pub enum EndMode {
-    #[genum(
+    #[enum_value(
         name = "Do not stop until the stream has been sealed.",
         nick = "unbounded"
     )]
     Unbounded = 0,
-    #[genum(
+    #[enum_value(
         name = "Determine the last byte in the data stream when the pipeline starts. \
                 Stop immediately after that byte has been emitted.",
         nick = "latest"
     )]
     Latest = 1,
-    #[genum(
+    #[enum_value(
         name = "Search the index for the last record when the pipeline starts. \
                 Stop immediately before the located position.",
         nick = "latest-indexed"
     )]
     LatestIndexed = 2,
-    #[genum(
+    #[enum_value(
         name = "Search the index for the record on or immediately after \
                 the specified end-timestamp or end-utc. \
                 Stop immediately before the located position.",

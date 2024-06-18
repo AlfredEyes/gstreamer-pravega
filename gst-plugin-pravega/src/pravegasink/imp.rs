@@ -57,18 +57,18 @@ const PROPERTY_NAME_RETENTION_DAYS: &str = "retention-days";
 const PROPERTY_NAME_RETENTION_BYTES: &str = "retention-bytes";
 const PROPERTY_NAME_RETENTION_MAINTENANCE_INTERVAL_SECONDS: &str = "retention-maintenance-interval-seconds";
 
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::GEnum)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::Enum)]
 #[repr(u32)]
-#[genum(type_name = "GstTimestampMode")]
+#[enum_type(name = "GstTimestampMode")]
 pub enum TimestampMode {
-    #[genum(
+    #[enum_value(
         name = "(DEPRECATED) Pipeline uses the realtime clock which provides nanoseconds \
                 since the Unix epoch 1970-01-01 00:00:00 UTC, not including leap seconds. \
                 This mode is deprecated. Instead, use the timestampcvt element with input-timestamp-mode=start-at-current-time.",
         nick = "realtime-clock"
     )]
     RealtimeClock = 0,
-    #[genum(
+    #[enum_value(
         name = "(DEPRECATED) Input buffer timestamps are nanoseconds \
                 since the NTP epoch 1900-01-01 00:00:00 UTC, not including leap seconds. \
                 Use this for buffers from rtspsrc (ntp-sync=true ntp-time-source=running-time). \
@@ -76,7 +76,7 @@ pub enum TimestampMode {
         nick = "ntp"
     )]
     Ntp = 1,
-    #[genum(
+    #[enum_value(
         name = "Input buffer timestamps are nanoseconds \
                 since 1970-01-01 00:00:00 TAI International Atomic Time, including leap seconds.",
         nick = "tai"
@@ -84,26 +84,26 @@ pub enum TimestampMode {
     Tai = 2,
 }
 
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::GEnum)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::Enum)]
 #[repr(u32)]
-#[genum(type_name = "GstRetentionType")]
+#[enum_type(name = "GstRetentionType")]
 pub enum RetentionType {
-    #[genum(
+    #[enum_value(
         name = "If 'none', no data will be deleted from the stream. ",
         nick = "none"
     )]
     None = 0,
-    #[genum(
+    #[enum_value(
         name = "If 'days', data older than 'retention-days' will be deleted from the stream.",
         nick = "days"
     )]
     Days = 1,
-    #[genum(
+    #[enum_value(
         name = "If 'bytes', the oldest data will be deleted so that the data size does not exceed 'retention-bytes'.",
         nick = "bytes"
     )]
     Bytes = 2,
-    #[genum(
+    #[enum_value(
         name = "If 'daysAndBytes', the oldest data will be deleted if it is older than 'retention-days' or the data size exceeds 'retention-bytes'.",
         nick = "daysAndBytes"
     )]

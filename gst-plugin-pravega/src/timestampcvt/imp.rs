@@ -35,11 +35,11 @@ const PROPERTY_NAME_INPUT_TIMESTAMP_MODE: &str = "input-timestamp-mode";
 const PROPERTY_NAME_START_UTC: &str = "start-utc";
 const NICK_START_AT_CURRENT_TIME: &str = "start-at-current-time";
 
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::GEnum)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Clone, Copy, glib::Enum)]
 #[repr(u32)]
-#[genum(type_name = "GstInputTimestampMode")]
+#[enum_type(name = "GstInputTimestampMode")]
 pub enum InputTimestampMode {
-    #[genum(
+    #[enum_value(
         name = "Input buffer timestamps are nanoseconds \
                 since the NTP epoch 1900-01-01 00:00:00 UTC, not including leap seconds. \
                 Use this for buffers from rtspsrc (ntp-sync=true ntp-time-source=running-time) \
@@ -48,7 +48,7 @@ pub enum InputTimestampMode {
     )]
     Ntp = 0,
 
-    #[genum(
+    #[enum_value(
         name = "Input buffer timestamps are nanoseconds \
                 since 1970-01-01 00:00:00 TAI International Atomic Time, including leap seconds. \
                 Use this for buffers from pravegasrc.",
@@ -56,14 +56,14 @@ pub enum InputTimestampMode {
     )]
     Tai = 1,
 
-    #[genum(
+    #[enum_value(
         name = "The first buffer corresponds with the current time. \
                 All output buffer timestamps will be offset by the same amount.",
         nick = "start-at-current-time"
     )]
     StartAtCurrentTime = 2,
 
-    #[genum(
+    #[enum_value(
         name = "The first buffer corresponds to the fixed time specified in start-utc. \
                 All buffer timestamps will be offset by the same amount.",
         nick = "start-at-fixed-time"
