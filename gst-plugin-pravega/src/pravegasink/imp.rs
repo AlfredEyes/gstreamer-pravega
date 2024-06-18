@@ -946,7 +946,7 @@ impl BaseSinkImpl for PravegaSink {
                             if is_delta_unit {
                                 // We are at a delta frame.
                                 if timestamp > last_index_time + index_max_nanos {
-                                    gst_fixme!(CAT, obj: element,
+                                    fixme!(CAT, obj: element,
                                         "render: Forcing index record at delta unit because no key frame has been received for {} sec", interval_sec);
                                     true
                                 } else {
@@ -977,7 +977,7 @@ impl BaseSinkImpl for PravegaSink {
                                     Some(first_valid_time) => {
                                         if timestamp > first_valid_time + index_max_nanos {
                                             let interval_sec = u64_to_i64_saturating_sub(timestamp, first_valid_time) as f64 * 1e-9;
-                                            gst_fixme!(CAT, obj: element,
+                                            fixme!(CAT, obj: element,
                                                 "render: Forcing first index record at delta unit because no key frame has been received for {} sec", interval_sec);
                                             true
                                         } else {
@@ -1070,7 +1070,7 @@ impl BaseSinkImpl for PravegaSink {
                     EventWithHeader::new(&payload[pos_to_write..pos_to_write+length_to_write],
                         timestamp, false, false, false)
                 };
-                gst_memdump!(CAT, obj: element, "render: writing event={:?}", event);
+                memdump!(CAT, obj: element, "render: writing event={:?}", event);
                 let mut event_writer = EventWriter::new();
                 event_writer.write(&event, writer).map_err(|err| {
                     gst::element_error!(

@@ -942,7 +942,7 @@ impl PushSrcImpl for PravegaSrc {
                     gst::FlowError::Error
                 }
             })?;
-            gst_memdump!(CAT, obj: element, "create: event={:?}", event);
+            memdump!(CAT, obj: element, "create: event={:?}", event);
             let offset_end = reader.stream_position().unwrap();
 
             let mut gst_buffer = gst::Buffer::with_size(event.payload.len()).unwrap();
