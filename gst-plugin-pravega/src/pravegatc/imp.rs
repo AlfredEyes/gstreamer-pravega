@@ -13,7 +13,7 @@ use gst::ClockTime;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 #[allow(unused_imports)]
-use gst::{gst_debug, gst_error, gst_warning, gst_info, gst_log, gst_trace};
+use gst::{debug, error, warning, info, log, trace};
 use once_cell::sync::Lazy;
 use pravega_client::client_factory::ClientFactory;
 use pravega_client::sync::table::{Table, TableError, Version};
@@ -145,7 +145,7 @@ impl PravegaTC {
                 (Some(scope), Some(table))
             }
             None => {
-                gst_info!(CAT, obj: element, "Resetting `{}` to None", PROPERTY_NAME_TABLE);
+                info!(CAT, obj: element, "Resetting `{}` to None", PROPERTY_NAME_TABLE);
                 (None, None)
             }
         };
@@ -165,7 +165,7 @@ impl PravegaTC {
     }
 
     fn start(&self, element: &super::PravegaTC) -> Result<(), gst::ErrorMessage> {
-        gst_debug!(CAT, obj: element, "start: BEGIN");
+        debug!(CAT, obj: element, "start: BEGIN");
         let result = (|| {
             let mut state = self.state.lock().unwrap();
             if let State::Started { .. } = *state {
@@ -178,7 +178,7 @@ impl PravegaTC {
             // a fault when the PTS reaches this value.
             if let Ok(fault_injection_pts) = str::parse::<u64>(env::var(format!("FAULT_INJECTION_PTS_{}", element.name())).unwrap_or_default().as_str()) {
                 settings.fault_injection_pts = fault_injection_pts * gst::NSECOND;
-                gst_warning!(CAT, obj: element, "start: fault_injection_pts={:?}", settings.fault_injection_pts);
+                warning!(CAT, obj: element, "start: fault_injection_pts={:?}", settings.fault_injection_pts);
             }
 
             let scope_name: String = settings.scope.clone().ok_or_else(|| {
@@ -188,20 +188,20 @@ impl PravegaTC {
                 gst::error_msg!(gst::ResourceError::Settings, ["Table is not defined"])
             })?;
             let scope = Scope::from(scope_name);
-            gst_info!(CAT, obj: element, "start: scope={}, table_name={}", scope, table_name);
+            info!(CAT, obj: element, "start: scope={}, table_name={}", scope, table_name);
             let controller = settings.controller.clone().ok_or_else(|| {
                 gst::error_msg!(gst::ResourceError::Settings, ["Controller is not defined"])
             })?;
-            gst_info!(CAT, obj: element, "start: controller={}", controller);
+            info!(CAT, obj: element, "start: controller={}", controller);
             let keycloak_file = settings.keycloak_file.clone();
-            gst_info!(CAT, obj: element, "start: keycloak_file={:?}", keycloak_file);
+            info!(CAT, obj: element, "start: keycloak_file={:?}", keycloak_file);
             let config = utils::create_client_config(controller, keycloak_file).map_err(|error| {
                 gst::error_msg!(gst::ResourceError::Settings, ["Failed to create Pravega client config: {}", error])
             })?;
-            gst_trace!(CAT, obj: element, "start: config={:?}", config);
-            gst_info!(CAT, obj: element, "start: controller_uri={}:{}", config.controller_uri.domain_name(), config.controller_uri.port());
-            gst_info!(CAT, obj: element, "start: is_tls_enabled={}", config.is_tls_enabled);
-            gst_info!(CAT, obj: element, "start: is_auth_enabled={}", config.is_auth_enabled);
+            trace!(CAT, obj: element, "start: config={:?}", config);
+            info!(CAT, obj: element, "start: controller_uri={}:{}", config.controller_uri.domain_name(), config.controller_uri.port());
+            info!(CAT, obj: element, "start: is_tls_enabled={}", config.is_tls_enabled);
+            info!(CAT, obj: element, "start: is_auth_enabled={}", config.is_auth_enabled);
 
             let client_factory = ClientFactory::new(config);
             let runtime = client_factory.runtime();
@@ -211,13 +211,13 @@ impl PravegaTC {
 
             // Get last checkpointed state (pts) from Pravega table.
             let persistent_state: Result<Option<(PersistentState, Version)>, TableError> = runtime.block_on(table.get(&PERSISTENT_STATE_TABLE_KEY.to_string()));
-            gst_debug!(CAT, obj: element, "start: persistent_state={:?}", persistent_state);
+            debug!(CAT, obj: element, "start: persistent_state={:?}", persistent_state);
             let persistent_state = persistent_state.unwrap();
             match persistent_state {
                 Some((mut persistent_state, version)) => {                    
                     // Increment resume_count every time we attempt to resume.
                     persistent_state.resume_count = Some(persistent_state.resume_count.unwrap_or_default() + 1);
-                    gst_log!(CAT, obj: element, "start: writing persistent state {:?}", persistent_state);
+                    log!(CAT, obj: element, "start: writing persistent state {:?}", persistent_state);
                     runtime.block_on(table.insert_conditionally(&PERSISTENT_STATE_TABLE_KEY.to_string(), &persistent_state, version, -1)).map_err(|error| {
                         gst::error_msg!(gst::CoreError::Failed, ["Failed to write to Pravega table: {}", error])
                     })?;
@@ -230,23 +230,23 @@ impl PravegaTC {
                     let initial_skip_time_delta = 2 * SECOND;
                     let (resume_time_delta, start_mode) = if resume_count >= max_exact_resume_count + 1 {
                         let resume_time_delta = u64::pow(2, u32::min(24, (resume_count - max_exact_resume_count - 1) as u32)) * initial_skip_time_delta;
-                        gst_warning!(CAT, obj: element, "start: Skipping {:?} due to {} resume attempts", resume_time_delta, resume_count);
+                        warning!(CAT, obj: element, "start: Skipping {:?} due to {} resume attempts", resume_time_delta, resume_count);
                         (resume_time_delta, "timestamp")
                     } else {
                         (0 * SECOND, "timestamp-exact")
                     };
                     let resume_at_pts: PravegaTimestamp = original_resume_at_pts + resume_time_delta;
                     
-                    gst_info!(CAT, obj: element, "start: Resuming at PTS {:?}", resume_at_pts);
+                    info!(CAT, obj: element, "start: Resuming at PTS {:?}", resume_at_pts);
                     let pipeline = element.parent().unwrap().downcast::<gst::Pipeline>().unwrap();
                     let children = pipeline.children();
                     // Find all pravegasrc elements and set start-timestamp property.
                     let mut elements_found = false;
                     for child in children {
-                        gst_trace!(CAT, obj: element, "start: child={:?}", child);
+                        trace!(CAT, obj: element, "start: child={:?}", child);
                         let child_type_name = child.type_().name();
                         if child_type_name == "PravegaSrc" {
-                            gst_debug!(CAT, obj: element, "start: Setting start-timestamp of element {:?}", child.name());
+                            debug!(CAT, obj: element, "start: Setting start-timestamp of element {:?}", child.name());
                             child.set_property_from_str("start-mode", start_mode);
                             child.set_property("start-timestamp", &resume_at_pts.nanoseconds().unwrap()).unwrap();
                             elements_found = true;
@@ -257,7 +257,7 @@ impl PravegaTC {
                     }
                 },
                 None => {
-                    gst_info!(CAT, obj: element, "start: No persistent state found.");
+                    info!(CAT, obj: element, "start: No persistent state found.");
                 },
             }
 
@@ -269,10 +269,10 @@ impl PravegaTC {
                     final_resume_at_pts: PravegaTimestamp::none(),
                 },
             };
-            gst_info!(CAT, obj: element, "start: Started");
+            info!(CAT, obj: element, "start: Started");
             Ok(())
         })();
-        gst_debug!(CAT, obj: element, "start: END: result={:?}", result);
+        debug!(CAT, obj: element, "start: END: result={:?}", result);
         result
     }
 
@@ -282,7 +282,7 @@ impl PravegaTC {
         element: &super::PravegaTC,
         buffer: gst::Buffer,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
-        gst_trace!(CAT, obj: pad, "sink_chain: Handling buffer {:?}", buffer);
+        trace!(CAT, obj: pad, "sink_chain: Handling buffer {:?}", buffer);
 
         let (fault_injection_pts, record_period) = {
             let settings = self.settings.lock().unwrap();
@@ -305,7 +305,7 @@ impl PravegaTC {
         let buffer_duration = buffer.duration();
 
         if fault_injection_pts.is_some() && buffer_pts >= fault_injection_pts {
-            gst_error!(CAT, obj: pad, "Injecting fault");
+            error!(CAT, obj: pad, "Injecting fault");
             return Err(gst::FlowError::Error)
         }
 
@@ -319,14 +319,14 @@ impl PravegaTC {
 
             // Periodically write buffer PTS to persistent state.
             if state.last_recorded_pts.is_none() || state.last_recorded_pts + record_period <= buffer_pts {
-                gst_debug!(CAT, obj: element, "sink_chain: writing persistent state to resume at {:?}", resume_at_pts);
+                debug!(CAT, obj: element, "sink_chain: writing persistent state to resume at {:?}", resume_at_pts);
                 let runtime = state.client_factory.runtime();
                 let table = state.table.lock().unwrap();
                 let persistent_state = PersistentState {
                     resume_at_pts: resume_at_pts.nanoseconds().unwrap(),
                     resume_count: Some(0),
                 };
-                gst_log!(CAT, obj: element, "sink_chain: writing persistent state {:?}", persistent_state);
+                log!(CAT, obj: element, "sink_chain: writing persistent state {:?}", persistent_state);
                 runtime.block_on(table.insert(&PERSISTENT_STATE_TABLE_KEY.to_string(), &persistent_state, -1)).map_err(|error| {
                     gst::element_error!(element, gst::CoreError::Failed, ["Failed to write to Pravega table: {}", error]);
                     gst::FlowError::Error
@@ -335,7 +335,7 @@ impl PravegaTC {
             }
         }
 
-        gst_trace!(CAT, obj: element, "sink_chain: END: state={:?}", state);
+        trace!(CAT, obj: element, "sink_chain: END: state={:?}", state);
         Ok(gst::FlowSuccess::Ok)
     }
 
@@ -356,7 +356,7 @@ impl PravegaTC {
     }
 
     fn stop(&self, element: &super::PravegaTC) -> Result<(), gst::ErrorMessage> {
-        gst_info!(CAT, obj: element, "stop: BEGIN");
+        info!(CAT, obj: element, "stop: BEGIN");
         let result = (|| {
             let mut st = self.state.lock().unwrap();
             let state = match *st {
@@ -369,7 +369,7 @@ impl PravegaTC {
                 }
             };
             if state.final_resume_at_pts.is_some() {
-                gst_info!(CAT, obj: element, "stop: writing final persistent state to resume at {:?}", state.final_resume_at_pts);
+                info!(CAT, obj: element, "stop: writing final persistent state to resume at {:?}", state.final_resume_at_pts);
                 let runtime = state.client_factory.runtime();
                 let table = state.table.lock().unwrap();
                 let persistent_state = PersistentState {
@@ -383,7 +383,7 @@ impl PravegaTC {
             *st = State::Stopped;
             Ok(())
         })();
-        gst_info!(CAT, obj: element, "stop: END: result={:?}", result);
+        info!(CAT, obj: element, "stop: END: result={:?}", result);
         result
     }
 }
@@ -504,7 +504,7 @@ impl ObjectImpl for PravegaTC {
                     Err(_) => unreachable!("type checked upstream"),
                 };
                 if let Err(err) = res {
-                    gst_error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_TABLE, err);
+                    error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_TABLE, err);
                 }
             },
             PROPERTY_NAME_CONTROLLER => {
@@ -520,7 +520,7 @@ impl ObjectImpl for PravegaTC {
                     Err(_) => unreachable!("type checked upstream"),
                 };
                 if let Err(err) = res {
-                    gst_error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_CONTROLLER, err);
+                    error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_CONTROLLER, err);
                 }
             },
             PROPERTY_NAME_KEYCLOAK_FILE => {
@@ -537,7 +537,7 @@ impl ObjectImpl for PravegaTC {
                     Err(_) => unreachable!("type checked upstream"),
                 };
                 if let Err(err) = res {
-                    gst_error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_KEYCLOAK_FILE, err);
+                    error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_KEYCLOAK_FILE, err);
                 }
             },
         _ => unimplemented!(),
@@ -585,7 +585,7 @@ impl ElementImpl for PravegaTC {
         element: &Self::Type,
         transition: gst::StateChange,
     ) -> Result<gst::StateChangeSuccess, gst::StateChangeError> {
-        gst_trace!(CAT, obj: element, "change_state: Changing state {:?}", transition);
+        trace!(CAT, obj: element, "change_state: Changing state {:?}", transition);
         match transition {
             gst::StateChange::ReadyToPaused => {
                 self.start(element).unwrap();

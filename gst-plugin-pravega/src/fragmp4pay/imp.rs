@@ -13,7 +13,7 @@ use gst::ClockTime;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 #[allow(unused_imports)]
-use gst::{gst_debug, gst_error, gst_warning, gst_info, gst_log, gst_trace};
+use gst::{debug, error, warning, info, log, trace};
 use once_cell::sync::Lazy;
 use std::convert::TryInto;
 use std::sync::Mutex;
@@ -165,7 +165,7 @@ impl FragMp4Pay {
         element: &super::FragMp4Pay,
         buffer: gst::Buffer,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
-        gst_log!(CAT, obj: pad, "Handling buffer {:?}", buffer);
+        log!(CAT, obj: pad, "Handling buffer {:?}", buffer);
 
         let mut state = self.state.lock().unwrap();
 
@@ -210,25 +210,25 @@ impl FragMp4Pay {
             if buffer.flags().contains(gst::BufferFlags::DISCONT) {
                 state.fragment_buffer_flags.insert(gst::BufferFlags::DISCONT);
             }
-            gst_trace!(CAT, obj: pad, "Updated state={:?}", state);
+            trace!(CAT, obj: pad, "Updated state={:?}", state);
         }
 
         loop {
             match state.mp4_parser.pop_atom() {
                 Some(atom) => {
-                    gst_log!(CAT, obj: pad, "atom_size={}, atom_type={}", atom.len(), atom.atom_type);
+                    log!(CAT, obj: pad, "atom_size={}, atom_type={}", atom.len(), atom.atom_type);
                     match atom.atom_type {
                         ATOM_TYPE_FTYPE => {
                             state.ftype_atom = Some(atom);
-                            gst_log!(CAT, obj: pad, "ftype_atom={:?}", state.ftype_atom);
+                            log!(CAT, obj: pad, "ftype_atom={:?}", state.ftype_atom);
                         },
                         ATOM_TYPE_MOOV => {
                             state.moov_atom = Some(atom);
-                            gst_log!(CAT, obj: pad, "moov_atom={:?}", state.moov_atom);
+                            log!(CAT, obj: pad, "moov_atom={:?}", state.moov_atom);
                         },
                         ATOM_TYPE_MOOF => {
                             state.moof_atom = Some(atom);
-                            gst_log!(CAT, obj: pad, "moof_atom={:?}", state.moof_atom);
+                            log!(CAT, obj: pad, "moof_atom={:?}", state.moof_atom);
                         },
                         ATOM_TYPE_MDAT => {
                             let mdat_atom = atom;
@@ -241,7 +241,7 @@ impl FragMp4Pay {
                                         0
                                     };
                                     let output_buf_len = header_len + moof_atom.len() + mdat_atom.len();
-                                    gst_log!(CAT, obj: pad, "Pushing buffer; include_header={}, ftype.len={}, moov.len={}, moof.len={}, mdat.len={}",
+                                    log!(CAT, obj: pad, "Pushing buffer; include_header={}, ftype.len={}, moov.len={}, moof.len={}, mdat.len={}",
                                         include_header, ftype_atom.len(), moov_atom.len(), moof_atom.len(), mdat_atom.len());
                                     let mut gst_buffer = gst::Buffer::with_size(output_buf_len).unwrap();
                                     {
@@ -276,23 +276,23 @@ impl FragMp4Pay {
                                     state.fragment_offset_end = None;
                                     state.fragment_buffer_flags = gst::BufferFlags::DELTA_UNIT;
                                     // Push new buffer.
-                                    gst_log!(CAT, obj: pad, "Pushing buffer {:?}", gst_buffer);
+                                    log!(CAT, obj: pad, "Pushing buffer {:?}", gst_buffer);
                                     let _ = self.srcpad.push(gst_buffer)?;
                                 },
                                 _ => {
-                                    gst_warning!(CAT, obj: pad, "Received mdat without ftype, moov, or moof");
+                                    warning!(CAT, obj: pad, "Received mdat without ftype, moov, or moof");
                                 },
                             }
                         },
                         _ => {
-                            gst_warning!(CAT, obj: pad, "Unknown atom type {:?}", atom);
+                            warning!(CAT, obj: pad, "Unknown atom type {:?}", atom);
                         },
                     }
                 },
                 None => break,
             }
         };
-        gst_trace!(CAT, obj: element, "sink_chain: END: state={:?}", state);
+        trace!(CAT, obj: element, "sink_chain: END: state={:?}", state);
         Ok(gst::FlowSuccess::Ok)
     }
 
