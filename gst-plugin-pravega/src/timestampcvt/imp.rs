@@ -233,7 +233,7 @@ impl TimestampCvt {
                 // If this persists for more than 15 seconds, the pipeline will stop with an error.
                 warning!(CAT, obj: pad, "Dropping buffer because input PTS {} cannot be converted to the range {:?} to {:?}.",
                     input_pts, PravegaTimestamp::MIN, PravegaTimestamp::MAX);
-                if input_pts > 15 * gst::SECOND {
+                if input_pts > 15 * gstreamer_sys::GST_SECOND {
                     error!(CAT, obj: pad,
                         "Input buffers do not have valid PTS timestamps. \
                         If you are using an RTSP source, this may occur if the RTSP source is not sending RTCP Sender Reports. \

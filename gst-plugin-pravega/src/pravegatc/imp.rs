@@ -77,7 +77,7 @@ impl Default for Settings {
             controller: utils::default_pravega_controller_uri(),
             keycloak_file: utils::default_keycloak_file(),
             fault_injection_pts: ClockTime::none(),
-            record_period: DEFAULT_RECORD_PERIOD_MSECOND * gst::MSECOND,
+            record_period: DEFAULT_RECORD_PERIOD_MSECOND * gstreamer_sys::GST_MSECOND,
         }
     }
 }
@@ -177,7 +177,7 @@ impl PravegaTC {
             // If the environment variable FAULT_INJECTION_PTS_pravegatc is set to a u64, this element will inject
             // a fault when the PTS reaches this value.
             if let Ok(fault_injection_pts) = str::parse::<u64>(env::var(format!("FAULT_INJECTION_PTS_{}", element.name())).unwrap_or_default().as_str()) {
-                settings.fault_injection_pts = fault_injection_pts * gst::NSECOND;
+                settings.fault_injection_pts = fault_injection_pts * gstreamer_sys::GST_NSECOND;
                 warning!(CAT, obj: element, "start: fault_injection_pts={:?}", settings.fault_injection_pts);
             }
 

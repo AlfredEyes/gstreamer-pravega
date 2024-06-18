@@ -198,10 +198,10 @@ impl FragMp4Pay {
             if state.fragment_max_pts_plus_duration.is_none() || state.fragment_max_pts_plus_duration < pts_plus_duration {
                 state.fragment_max_pts_plus_duration = pts_plus_duration;
             }
-            if buffer.offset() != gst::BUFFER_OFFSET_NONE && (state.fragment_offset.is_none() || state.fragment_offset.unwrap() > buffer.offset()) {
+            if buffer.offset() != gstreamer_sys::GST_BUFFER_OFFSET_NONE && (state.fragment_offset.is_none() || state.fragment_offset.unwrap() > buffer.offset()) {
                 state.fragment_offset = Some(buffer.offset());
             }
-            if buffer.offset_end() != gst::BUFFER_OFFSET_NONE && (state.fragment_offset_end.is_none() || state.fragment_offset_end.unwrap() < buffer.offset_end()) {
+            if buffer.offset_end() != gstreamer_sys::GST_BUFFER_OFFSET_NONE && (state.fragment_offset_end.is_none() || state.fragment_offset_end.unwrap() < buffer.offset_end()) {
                 state.fragment_offset_end = Some(buffer.offset_end());
             }
             if state.fragment_buffer_flags.contains(gst::BufferFlags::DELTA_UNIT) && !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT) {
@@ -250,8 +250,8 @@ impl FragMp4Pay {
                                         buffer_ref.set_dts(state.fragment_dts);
                                         let duration = state.fragment_max_pts_plus_duration - state.fragment_pts;
                                         buffer_ref.set_duration(duration);
-                                        buffer_ref.set_offset(state.fragment_offset.unwrap_or(gst::BUFFER_OFFSET_NONE));
-                                        buffer_ref.set_offset_end(state.fragment_offset_end.unwrap_or(gst::BUFFER_OFFSET_NONE));
+                                        buffer_ref.set_offset(state.fragment_offset.unwrap_or(gstreamer_sys::GST_BUFFER_OFFSET_NONE));
+                                        buffer_ref.set_offset_end(state.fragment_offset_end.unwrap_or(gstreamer_sys::GST_BUFFER_OFFSET_NONE));
                                         buffer_ref.set_flags(state.fragment_buffer_flags);
                                         let mut buffer_map = buffer_ref.map_writable().unwrap();
                                         let slice = buffer_map.as_mut_slice();
