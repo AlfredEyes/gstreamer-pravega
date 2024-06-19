@@ -12,13 +12,13 @@
 // Based on:
 //   - https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs/-/tree/master/generic/file/src/filesrc
 
-use glib::subclass::prelude::*;
 use gst::ClockTime;
+use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 use gst::{debug, error, info, log, trace, memdump};
 use gst_base::prelude::*;
-use gst_base::subclass::prelude::*;
+use gst_base::subclass::{base_src::CreateSuccess, prelude::*};
 
 use std::convert::{TryInto, TryFrom};
 use std::io::{BufReader, ErrorKind, Seek, SeekFrom};
@@ -174,6 +174,7 @@ impl Default for State {
     }
 }
 
+#[derive(Default)]
 pub struct PravegaSrc {
     settings: Mutex<Settings>,
     state: Mutex<State>,
@@ -243,109 +244,93 @@ impl ObjectSubclass for PravegaSrc {
     }
 }
 
+impl GstObjectImpl for PravegaSrc {}
+
 impl ObjectImpl for PravegaSrc {
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
+
+        let obj = self.obj();
         obj.set_format(gst::Format::Time);
     }
 
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| { vec![
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_STREAM,
-                "Stream",
-                "scope/stream",
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_CONTROLLER,
-                "Controller",
-                format!("Pravega controller. \
+            glib::ParamSpecString::builder(PROPERTY_NAME_STREAM)
+                .nick("Stream")
+                .blurb("scope/stream")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_CONTROLLER)
+                .nick("Controller")
+                .blurb(format!("Pravega controller. \
                     If not specified, this will use the value of the environment variable {}. \
                     If that is empty, it will use the default of {}.",
-                    utils::ENV_PRAVEGA_CONTROLLER_URI, utils::DEFAULT_PRAVEGA_CONTROLLER_URI).as_str(),
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_uint(
-                PROPERTY_NAME_BUFFER_SIZE,
-                "Buffer size",
-                "Size of buffer in number of bytes",
-                0,
-                std::u32::MAX,
-                DEFAULT_BUFFER_SIZE.try_into().unwrap(),
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_enum(
-                PROPERTY_NAME_START_MODE,
-                "Start mode",
-                "The position to start reading the stream at",
-                StartMode::static_type(),
-                DEFAULT_START_MODE as i32,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_enum(
-                PROPERTY_NAME_END_MODE,
-                "End mode",
-                "The position to end reading the stream at",
-                EndMode::static_type(),
-                DEFAULT_END_MODE as i32,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_uint64(
-                PROPERTY_NAME_START_TIMESTAMP,
-                "Start timestamp",
-                "If start-mode=timestamp, this is the timestamp at which to start, \
-                in nanoseconds since 1970-01-01 00:00 TAI (International Atomic Time).",
-                0,
-                std::u64::MAX,
-                DEFAULT_START_TIMESTAMP,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_uint64(
-                PROPERTY_NAME_END_TIMESTAMP,
-                "End timestamp",
-                "If end-mode=timestamp, this is the timestamp at which to stop, \
-                in nanoseconds since 1970-01-01 00:00 TAI (International Atomic Time).",
-                0,
-                std::u64::MAX,
-                DEFAULT_END_TIMESTAMP,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_START_UTC,
-                "Start UTC",
-                "If start-mode=utc, this is the timestamp at which to start, \
-                in RFC 3339 format. For example: 2021-12-28T23:41:45.691Z",
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_END_UTC,
-                "End UTC",
-                "If end-mode=utc, this is the timestamp at which to stop, \
-                in RFC 3339 format. For example: 2021-12-28T23:41:45.691Z",
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_boolean(
-                PROPERTY_NAME_ALLOW_CREATE_SCOPE,
-                "Allow create scope",
-                "If true, the Pravega scope will be created if needed.",
-                true,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_KEYCLOAK_FILE,
-                "Keycloak file",
-                format!("The filename containing the Keycloak credentials JSON. \
+                    utils::ENV_PRAVEGA_CONTROLLER_URI, utils::DEFAULT_PRAVEGA_CONTROLLER_URI).as_str())
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecUInt::builder(PROPERTY_NAME_BUFFER_SIZE)
+                .nick("Buffer size")
+                .blurb("Size of buffer in number of bytes")
+                .minimum(0)
+                .maximum(std::u32::MAX)
+                .default_value(DEFAULT_BUFFER_SIZE.try_into().unwrap())
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecEnum::builder_with_default(PROPERTY_NAME_START_MODE, DEFAULT_START_MODE)
+                .nick("Start mode")
+                .blurb("The position to start reading the stream at")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecEnum::builder_with_default(PROPERTY_NAME_END_MODE, DEFAULT_END_MODE)
+                .nick("End mode")
+                .blurb("The position to end reading the stream at")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecUInt64::builder(PROPERTY_NAME_START_TIMESTAMP)
+                .nick("Start timestamp")
+                .blurb("If start-mode=timestamp, this is the timestamp at which to start, \
+                in nanoseconds since 1970-01-01 00:00 TAI (International Atomic Time).")
+                .minimum(0)
+                .maximum(std::u64::MAX)
+                .default_value(DEFAULT_START_TIMESTAMP)
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecUInt64::builder(PROPERTY_NAME_END_TIMESTAMP)
+                .nick("End timestamp")
+                .blurb("If end-mode=timestamp, this is the timestamp at which to stop, \
+                in nanoseconds since 1970-01-01 00:00 TAI (International Atomic Time).")
+                .minimum(0)
+                .maximum(std::u64::MAX)
+                .default_value(DEFAULT_END_TIMESTAMP)
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_START_UTC)
+                .nick("Start UTC")
+                .blurb("If start-mode=utc, this is the timestamp at which to start, \
+                in RFC 3339 format. For example: 2021-12-28T23:41:45.691Z")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_END_UTC)
+                .nick("End UTC")
+                .blurb("If end-mode=utc, this is the timestamp at which to stop, \
+                in RFC 3339 format. For example: 2021-12-28T23:41:45.691Z")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecBoolean::builder(PROPERTY_NAME_ALLOW_CREATE_SCOPE)
+                .nick("Allow create scope")
+                .blurb("If true, the Pravega scope will be created if needed.")
+                .default_value(true)
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_KEYCLOAK_FILE)
+                .nick("Keycloak file")
+                .blurb(format!("The filename containing the Keycloak credentials JSON. \
                     If not specified, this will use the value of the environment variable {}. \
                     If that is empty, authentication will be disabled.",
-                    utils::ENV_KEYCLOAK_SERVICE_ACCOUNT_FILE).as_str(),
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
+                    utils::ENV_KEYCLOAK_SERVICE_ACCOUNT_FILE).as_str())
+                .mutable_ready()
+                .build(),
         ]});
         PROPERTIES.as_ref()
     }
@@ -353,11 +338,11 @@ impl ObjectImpl for PravegaSrc {
     // TODO: On error, should set flag that will cause element to fail.
     fn set_property(
         &self,
-        obj: &Self::Type,
         _id: usize,
         value: &glib::Value,
         pspec: &glib::ParamSpec,
     ) {
+        let obj = self.obj();
         match pspec.name() {
             PROPERTY_NAME_STREAM => {
                 let res = match value.get::<String>() {
@@ -541,8 +526,8 @@ impl ElementImpl for PravegaSrc {
 }
 
 impl BaseSrcImpl for PravegaSrc {
-    fn start(&self, element: &Self::Type) -> Result<(), gst::ErrorMessage> {
-        debug!(CAT, obj: element, "start: BEGIN");
+    fn start(&self) -> Result<(), gst::ErrorMessage> {
+        debug!(CAT, imp: self, "start: BEGIN");
         let result = (|| {
             let mut state = self.state.lock().unwrap();
             if let State::Started { .. } = *state {
@@ -560,37 +545,37 @@ impl BaseSrcImpl for PravegaSrc {
             let scope = Scope::from(scope_name);
             let stream = Stream::from(stream_name);
             let index_stream = Stream::from(index_stream_name);
-            info!(CAT, obj: element, "start: scope={}, stream={}, index_stream={}", scope, stream, index_stream);
-            info!(CAT, obj: element, "start: start_mode={:?}, start_timestamp={:?}",
+            info!(CAT, imp: self, "start: scope={}, stream={}, index_stream={}", scope, stream, index_stream);
+            info!(CAT, imp: self, "start: start_mode={:?}, start_timestamp={:?}",
                 settings.start_mode, PravegaTimestamp::from_nanoseconds(Some(settings.start_timestamp)));
-            info!(CAT, obj: element, "start: end_mode={:?}, end_timestamp={:?}",
+            info!(CAT, imp: self, "start: end_mode={:?}, end_timestamp={:?}",
                 settings.end_mode, PravegaTimestamp::from_nanoseconds(Some(settings.end_timestamp)));
 
             let controller = settings.controller.clone().ok_or_else(|| {
                 gst::error_msg!(gst::ResourceError::Settings, ["Controller is not defined"])
             })?;
-            info!(CAT, obj: element, "start: controller={}", controller);
+            info!(CAT, imp: self, "start: controller={}", controller);
             let keycloak_file = settings.keycloak_file.clone();
-            info!(CAT, obj: element, "start: keycloak_file={:?}", keycloak_file);
+            info!(CAT, imp: self, "start: keycloak_file={:?}", keycloak_file);
             let config = utils::create_client_config(controller, keycloak_file).map_err(|error| {
                 gst::error_msg!(gst::ResourceError::Settings, ["Failed to create Pravega client config: {}", error])
             })?;
-            trace!(CAT, obj: element, "start: config={:?}", config);
-            info!(CAT, obj: element, "start: controller_uri={}:{}", config.controller_uri.domain_name(), config.controller_uri.port());
-            info!(CAT, obj: element, "start: is_tls_enabled={}", config.is_tls_enabled);
-            info!(CAT, obj: element, "start: is_auth_enabled={}", config.is_auth_enabled);
+            trace!(CAT, imp: self, "start: config={:?}", config);
+            info!(CAT, imp: self, "start: controller_uri={}:{}", config.controller_uri.domain_name(), config.controller_uri.port());
+            info!(CAT, imp: self, "start: is_tls_enabled={}", config.is_tls_enabled);
+            info!(CAT, imp: self, "start: is_auth_enabled={}", config.is_auth_enabled);
 
             let client_factory = ClientFactory::new(config);
             let controller_client = client_factory.controller_client();
             let runtime = client_factory.runtime();
 
             // Create scope.
-            info!(CAT, obj: element, "start: allow_create_scope={}", settings.allow_create_scope);
+            info!(CAT, imp: self, "start: allow_create_scope={}", settings.allow_create_scope);
             if settings.allow_create_scope {
                 // This is expected to fail in some environments, even if the scope already exists.
                 // We will log the error and continue.
                 let _ = runtime.block_on(controller_client.create_scope(&scope)).map_err(|error| {
-                    debug!(CAT, obj: element, "Failed to create Pravega scope. This is normal if the scope already exists: {:?}", error);
+                    debug!(CAT, imp: self, "Failed to create Pravega scope. This is normal if the scope already exists: {:?}", error);
                 });
             }
 
@@ -636,19 +621,19 @@ impl BaseSrcImpl for PravegaSrc {
             };
             let reader = runtime.block_on(client_factory.create_byte_reader(scoped_stream));
             let mut reader = SyncByteReader::new(reader, client_factory.runtime_handle());
-            info!(CAT, obj: element, "start: Opened Pravega reader for data");
+            info!(CAT, imp: self, "start: Opened Pravega reader for data");
 
             let index_scoped_stream = ScopedStream {
                 scope: scope.clone(),
                 stream: index_stream.clone(),
             };
             let index_reader = runtime.block_on(client_factory.create_byte_reader(index_scoped_stream));
-            info!(CAT, obj: element, "start: Opened Pravega reader for index");
+            info!(CAT, imp: self, "start: Opened Pravega reader for index");
 
             let mut index_searcher = IndexSearcher::new(SyncByteReader::new(index_reader, client_factory.runtime_handle()));
 
             // TODO: Run below based on CAT threshold.
-            // debug!(CAT, obj: element, "index_records={:?}", index_searcher.get_index_records());
+            // debug!(CAT, imp: self, "index_records={:?}", index_searcher.get_index_records());
 
             // end_offset is the byte offset in the data stream.
             // The data stream reader will be configured to never read beyond this offset.
@@ -661,18 +646,18 @@ impl BaseSrcImpl for PravegaSrc {
                 EndMode::LatestIndexed => {
                     // Determine Pravega stream offset for this timestamp by searching the index.
                     let index_record = index_searcher.get_last_record().unwrap();
-                    info!(CAT, obj: element, "start: end index_record={:?}", index_record);
+                    info!(CAT, imp: self, "start: end index_record={:?}", index_record);
                     index_record.offset
                 },
                 EndMode::Timestamp => {
                     let end_timestamp = PravegaTimestamp::from_nanoseconds(Some(settings.end_timestamp));
                     // Determine Pravega stream offset for this timestamp by searching the index.
                     let index_record = index_searcher.search_timestamp_after(end_timestamp).unwrap();
-                    info!(CAT, obj: element, "start: end index_record={:?}", index_record);
+                    info!(CAT, imp: self, "start: end index_record={:?}", index_record);
                     index_record.offset
                 },
             };
-            info!(CAT, obj: element, "start: end_offset={}", end_offset);
+            info!(CAT, imp: self, "start: end_offset={}", end_offset);
 
             let limited_reader = SeekableTake::new(reader, end_offset).unwrap();
             let buf_reader = BufReader::with_capacity(settings.buffer_size, limited_reader);
@@ -683,14 +668,14 @@ impl BaseSrcImpl for PravegaSrc {
                 index_searcher: Arc::new(Mutex::new(index_searcher)),
                 client_factory,
             };
-            info!(CAT, obj: element, "start: Started");
+            info!(CAT, imp: self, "start: Started");
             Ok(())
         })();
-        debug!(CAT, obj: element, "start: END: result={:?}", result);
+        debug!(CAT, imp: self, "start: END: result={:?}", result);
         result
     }
 
-    fn is_seekable(&self, _src: &Self::Type) -> bool {
+    fn is_seekable(&self) -> bool {
         true
     }
 
@@ -711,8 +696,8 @@ impl BaseSrcImpl for PravegaSrc {
     ///    the values from the located index record.
     /// 3) The segment times will be set so that each buffer will have a PTS and position equal to
     ///    the number of nanoseconds since 1970-01-01 0:00:00 TAI.
-    fn do_seek(&self, src: &Self::Type, segment: &mut gst::Segment) -> bool {
-        info!(CAT, obj: src, "do_seek: BEGIN: segment={:?}", segment);
+    fn do_seek(&self, segment: &mut gst::Segment) -> bool {
+        info!(CAT, imp: self, "do_seek: BEGIN: segment={:?}", segment);
         let result = (|| {
             // Get needed settings, then release lock.
             let (start_mode, initial_seek_start_timestamp) = {
@@ -759,10 +744,10 @@ impl BaseSrcImpl for PravegaSrc {
             // In the input segment parameter, start, position, and time are all set to the desired timestamp.
             // If this is the initial seek, these will be all 0, and we will seek to the first record in the index.
             let initial_seek =
-                segment.time().nseconds().unwrap() == 0 &&
-                segment.start().nseconds().unwrap() == 0 &&
-                segment.position().nseconds().unwrap() == 0;
-            info!(CAT, obj: src, "do_seek: initial_seek={}", initial_seek);
+                segment.time().unwrap().nseconds() == 0 &&
+                segment.start().unwrap().nseconds() == 0 &&
+                segment.position().unwrap().nseconds() == 0;
+            info!(CAT, imp: self, "do_seek: initial_seek={}", initial_seek);
             let no_seek = initial_seek && start_mode == StartMode::NoSeek;
             let seek_using_index = !no_seek;
             if seek_using_index {
@@ -771,10 +756,10 @@ impl BaseSrcImpl for PravegaSrc {
                 } else {
                     clocktime_to_pravega(segment.time())
                 };
-                info!(CAT, obj: src, "do_seek: seeking to timestamp {:?}", requested_seek_timestamp);
+                info!(CAT, imp: self, "do_seek: seeking to timestamp {:?}", requested_seek_timestamp);
                 // Determine the stream offset for this timestamp by searching the index.
                 let index_record = index_searcher.search_timestamp(requested_seek_timestamp);
-                info!(CAT, obj: src, "do_seek: index_record={:?}", index_record);
+                info!(CAT, imp: self, "do_seek: index_record={:?}", index_record);
                 match index_record {
                     Ok(index_record) => {
                         let segment_start_timestamp = match start_mode {
@@ -787,18 +772,18 @@ impl BaseSrcImpl for PravegaSrc {
                                 index_record.timestamp
                             },                                
                         };
-                        info!(CAT, obj: src, "do_seek: segment will start at {:?}", segment_start_timestamp);
-                        segment.set_start(ClockTime(segment_start_timestamp.nanoseconds()));
-                        segment.set_time(ClockTime(segment_start_timestamp.nanoseconds()));
-                        segment.set_position(0);
+                        info!(CAT, imp: self, "do_seek: segment will start at {:?}", segment_start_timestamp);
+                        segment.set_start(segment_start_timestamp.nanoseconds().map(ClockTime::from_nseconds));
+                        segment.set_time(segment_start_timestamp.nanoseconds().map(ClockTime::from_nseconds));
+                        segment.set_position(ClockTime::NONE);
                         reader.seek(SeekFrom::Start(index_record.offset)).unwrap();
-                        info!(CAT, obj: src, "do_seek: seeked to indexed position; segment={:?}", segment);
+                        info!(CAT, imp: self, "do_seek: seeked to indexed position; segment={:?}", segment);
                         true
                     },
                     Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
                         // This will happen if the index has no records.
                         // We cannot set the segment times appropriately.
-                        error!(CAT, obj: src, "do_seek: index is empty; segment={:?}", segment);
+                        error!(CAT, imp: self, "do_seek: index is empty; segment={:?}", segment);
                         // TODO: Block until the first index record is read.
                         false
                     },
@@ -809,26 +794,26 @@ impl BaseSrcImpl for PravegaSrc {
             } else {
                 // This is the initial seek and start-mode=no-seek.
                 // The index will not be used.
-                segment.set_start(0);
-                segment.set_time(0);
-                segment.set_position(0);
+                segment.set_start(ClockTime::NONE);
+                segment.set_time(ClockTime::NONE);
+                segment.set_position(ClockTime::NONE);
                 let head_offset = reader.get_ref().get_ref().get_ref().current_head().unwrap();
                 reader.seek(SeekFrom::Start(head_offset)).unwrap();
-                info!(CAT, obj: src, "do_seek: Starting at head of data stream because start-mode=no-seek; segment={:?}", segment);
+                info!(CAT, imp: self, "do_seek: Starting at head of data stream because start-mode=no-seek; segment={:?}", segment);
                 true
             }
         })();
-        info!(CAT, obj: src, "do_seek: END: result={:?}", result);
+        info!(CAT, imp: self, "do_seek: END: result={:?}", result);
         result
     }
 
-    fn query(&self, src: &Self::Type, query: &mut gst::QueryRef) -> bool {
-        debug!(CAT, obj: src, "query: BEGIN: query={:?}", query);
+    fn query(&self, query: &mut gst::QueryRef) -> bool {
+        debug!(CAT, imp: self, "query: BEGIN: query={:?}", query);
         let result = (|| {
             match query.view_mut() {
                 // The Seeking query will return the current start and end timestamps
                 // as nanoseconds since the TAI epoch 1970-01-01 00:00:00 TAI.
-                gst::QueryView::Seeking(ref mut q) => {
+                gst::QueryViewMut::Seeking(ref mut q) => {
                     let fmt = q.format();
                     if fmt == gst::Format::Time {
                         // Get start and end timestamps from index.
@@ -852,34 +837,34 @@ impl BaseSrcImpl for PravegaSrc {
                         let start = match index_searcher.get_first_record() {
                             Ok(start) => start,
                             Err(err) => {
-                                error!(CAT, obj: src, "query: Unable to get first record from index: {}", err);
+                                error!(CAT, imp: self, "query: Unable to get first record from index: {}", err);
                                 return false;
                             }
                         };
                         let end = match index_searcher.get_last_record() {
                             Ok(end) => end,
                             Err(err) => {
-                                error!(CAT, obj: src, "query: Unable to get last record from index: {}", err);
+                                error!(CAT, imp: self, "query: Unable to get last record from index: {}", err);
                                 return false;
                             }
                         };
-                        info!(CAT, obj: src, "query: start={:?}, end={:?}", start, end);
-                        q.set(true, ClockTime(start.timestamp.nanoseconds()), ClockTime(end.timestamp.nanoseconds()));
+                        info!(CAT, imp: self, "query: start={:?}, end={:?}", start, end);
+                        q.set(true, start.timestamp.nanoseconds().map(ClockTime::from_nseconds), end.timestamp.nanoseconds().map(ClockTime::from_nseconds));
                         return true;
                     };
                     false
                 },
                 _ => {
-                    BaseSrcImplExt::parent_query(self, src, query)
+                    BaseSrcImplExt::parent_query(self, query)
                 },
             }
         })();
-        debug!(CAT, obj: src, "query: END: result={}, query={:?}", result, query);
+        debug!(CAT, imp: self, "query: END: result={}, query={:?}", result, query);
         result
     }
 
-    fn stop(&self, element: &Self::Type) -> Result<(), gst::ErrorMessage> {
-        info!(CAT, obj: element, "stop: BEGIN");
+    fn stop(&self) -> Result<(), gst::ErrorMessage> {
+        info!(CAT, imp: self, "stop: BEGIN");
         let result = (|| {
             let mut state = self.state.lock().unwrap();
             if let State::Stopped = *state {
@@ -891,14 +876,17 @@ impl BaseSrcImpl for PravegaSrc {
             *state = State::Stopped;
             Ok(())
         })();
-        info!(CAT, obj: element, "stop: END: result={:?}", result);
+        info!(CAT, imp: self, "stop: END: result={:?}", result);
         result
     }
 }
 
 impl PushSrcImpl for PravegaSrc {
-    fn create(&self, element: &Self::Type) -> Result<gst::Buffer, gst::FlowError> {
-        trace!(CAT, obj: element, "create: BEGIN");
+    fn create(
+        &self,
+        _buffer: Option<&mut gst::BufferRef>,
+    ) -> Result<CreateSuccess, gst::FlowError> {
+        trace!(CAT, imp: self, "create: BEGIN");
         let result = (|| {
 
             let mut state = self.state.lock().unwrap();
@@ -909,7 +897,7 @@ impl PushSrcImpl for PravegaSrc {
                     ..
                 } => reader,
                 State::Stopped => {
-                    gst::element_error!(element, gst::CoreError::Failed, ["Not started yet"]);
+                    gst::element_imp_error!(self, gst::CoreError::Failed, ["Not started yet"]);
                     panic!("Not started yet");
                 }
             };
@@ -923,10 +911,10 @@ impl PushSrcImpl for PravegaSrc {
             let offset = reader.stream_position().unwrap();
             let required_buffer_length = event_reader.read_required_buffer_length(reader).map_err(|err| {
                 if err.kind() == ErrorKind::UnexpectedEof {
-                    info!(CAT, obj: element, "create: reached EOF when trying to read event length");
+                    info!(CAT, imp: self, "create: reached EOF when trying to read event length");
                     gst::FlowError::Eos
                 } else {
-                    gst::element_error!(element, gst::CoreError::Failed, ["Failed to read event length from stream: {}", err]);
+                    gst::element_imp_error!(self, gst::CoreError::Failed, ["Failed to read event length from stream: {}", err]);
                     gst::FlowError::Error
                 }
             })?;
@@ -935,28 +923,29 @@ impl PushSrcImpl for PravegaSrc {
             let mut read_buffer: Vec<u8> = vec![0; required_buffer_length];
             let event = event_reader.read_event(reader, &mut read_buffer[..]).map_err(|err| {
                 if err.kind() == ErrorKind::UnexpectedEof {
-                    info!(CAT, obj: element, "create: reached EOF when trying to read event payload");
+                    info!(CAT, imp: self, "create: reached EOF when trying to read event payload");
                     gst::FlowError::Eos
                 } else {
-                    gst::element_error!(element, gst::CoreError::Failed, ["Failed to read event payload from stream: {}", err]);
+                    gst::element_imp_error!(self, gst::CoreError::Failed, ["Failed to read event payload from stream: {}", err]);
                     gst::FlowError::Error
                 }
             })?;
-            memdump!(CAT, obj: element, "create: event={:?}", event);
+            memdump!(CAT, imp: self, "create: event={:?}", event);
             let offset_end = reader.stream_position().unwrap();
 
             let mut gst_buffer = gst::Buffer::with_size(event.payload.len()).unwrap();
             {
                 let buffer_ref = gst_buffer.get_mut().unwrap();
 
-                let segment = element
+                let segment = self
+                    .obj()
                     .segment()
                     .downcast::<gst::format::Time>()
                     .unwrap();
-                trace!(CAT, obj: element, "create: segment={:?}", segment);
+                trace!(CAT, imp: self, "create: segment={:?}", segment);
                 let pts = pravega_to_clocktime(event.header.timestamp);
-                log!(CAT, obj: element, "create: timestamp={:?}, pts={}, payload_len={}",
-                    event.header.timestamp, pts, event.payload.len());
+                log!(CAT, imp: self, "create: timestamp={:?}, pts={}, payload_len={}",
+                    event.header.timestamp, pts.unwrap_or_default(), event.payload.len());
 
                 buffer_ref.set_pts(pts);
                 buffer_ref.set_offset(offset);
@@ -973,9 +962,9 @@ impl PushSrcImpl for PravegaSrc {
                 slice.copy_from_slice(event.payload);
             }
 
-            Ok(gst_buffer)
+            Ok(CreateSuccess::NewBuffer(gst_buffer))
         })();
-        trace!(CAT, obj: element, "create: END: result={:?}", result);
+        trace!(CAT, imp: self, "create: END: result={:?}", result);
         result
     }
 }

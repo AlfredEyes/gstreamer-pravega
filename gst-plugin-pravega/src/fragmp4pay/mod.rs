@@ -8,7 +8,8 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 
-use glib::prelude::*;
+use gst::glib;
+use gst::prelude::*;
 
 mod imp;
 
@@ -23,7 +24,7 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     gst::Element::register(
         Some(plugin),
         imp::ELEMENT_NAME,
-        gst::Rank::None,
+        gst::Rank::NONE,
         FragMp4Pay::static_type(),
     )
 }

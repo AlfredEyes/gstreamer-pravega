@@ -8,6 +8,8 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 
+use gst::glib;
+
 mod counting_reader;
 mod counting_writer;
 mod numeric;

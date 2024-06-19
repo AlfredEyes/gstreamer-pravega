@@ -8,8 +8,8 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 
-use glib::subclass::prelude::*;
 use gst::ClockTime;
+use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 #[allow(unused_imports)]
@@ -65,7 +65,7 @@ struct Settings {
     table: Option<String>,
     controller: Option<String>,
     keycloak_file: Option<String>,
-    fault_injection_pts: ClockTime,
+    fault_injection_pts: Option<ClockTime>,
     record_period: ClockTime,
 }
 
@@ -76,8 +76,8 @@ impl Default for Settings {
             table: None,
             controller: utils::default_pravega_controller_uri(),
             keycloak_file: utils::default_keycloak_file(),
-            fault_injection_pts: ClockTime::none(),
-            record_period: DEFAULT_RECORD_PERIOD_MSECOND * gstreamer_sys::GST_MSECOND,
+            fault_injection_pts: ClockTime::NONE,
+            record_period: ClockTime::from_mseconds(DEFAULT_RECORD_PERIOD_MSECOND),
         }
     }
 }
@@ -85,7 +85,7 @@ impl Default for Settings {
 struct StartedState {
     client_factory: ClientFactory,
     table: Arc<Mutex<Table>>,
-    last_recorded_pts: ClockTime,
+    last_recorded_pts: Option<ClockTime>,
     // The resume_at_pts that will be written to the persistent state upon end-of-stream.
     final_resume_at_pts: PravegaTimestamp,
 }
@@ -127,7 +127,6 @@ static CAT: Lazy<gst::DebugCategory> = Lazy::new(|| {
 impl PravegaTC {
     fn set_table(
         &self,
-        element: &super::PravegaTC,
         table: Option<String>,
     ) -> Result<(), glib::Error> {
         let mut settings = self.settings.lock().unwrap();
@@ -145,7 +144,7 @@ impl PravegaTC {
                 (Some(scope), Some(table))
             }
             None => {
-                info!(CAT, obj: element, "Resetting `{}` to None", PROPERTY_NAME_TABLE);
+                info!(CAT, imp: self, "Resetting `{}` to None", PROPERTY_NAME_TABLE);
                 (None, None)
             }
         };
@@ -156,7 +155,6 @@ impl PravegaTC {
 
     fn set_controller(
         &self,
-        _element: &super::PravegaTC,
         controller: Option<String>,
     ) -> Result<(), glib::Error> {
         let mut settings = self.settings.lock().unwrap();
@@ -164,8 +162,8 @@ impl PravegaTC {
         Ok(())
     }
 
-    fn start(&self, element: &super::PravegaTC) -> Result<(), gst::ErrorMessage> {
-        debug!(CAT, obj: element, "start: BEGIN");
+    fn start(&self) -> Result<(), gst::ErrorMessage> {
+        debug!(CAT, imp: self, "start: BEGIN");
         let result = (|| {
             let mut state = self.state.lock().unwrap();
             if let State::Started { .. } = *state {
@@ -176,9 +174,9 @@ impl PravegaTC {
             // Set fault injection parameters.
             // If the environment variable FAULT_INJECTION_PTS_pravegatc is set to a u64, this element will inject
             // a fault when the PTS reaches this value.
-            if let Ok(fault_injection_pts) = str::parse::<u64>(env::var(format!("FAULT_INJECTION_PTS_{}", element.name())).unwrap_or_default().as_str()) {
-                settings.fault_injection_pts = fault_injection_pts * gstreamer_sys::GST_NSECOND;
-                warning!(CAT, obj: element, "start: fault_injection_pts={:?}", settings.fault_injection_pts);
+            if let Ok(fault_injection_pts) = str::parse::<u64>(env::var(format!("FAULT_INJECTION_PTS_{}", self.obj().name())).unwrap_or_default().as_str()) {
+                settings.fault_injection_pts = Some(ClockTime::from_nseconds(fault_injection_pts));
+                warning!(CAT, imp: self, "start: fault_injection_pts={:?}", settings.fault_injection_pts);
             }
 
             let scope_name: String = settings.scope.clone().ok_or_else(|| {
@@ -188,20 +186,20 @@ impl PravegaTC {
                 gst::error_msg!(gst::ResourceError::Settings, ["Table is not defined"])
             })?;
             let scope = Scope::from(scope_name);
-            info!(CAT, obj: element, "start: scope={}, table_name={}", scope, table_name);
+            info!(CAT, imp: self, "start: scope={}, table_name={}", scope, table_name);
             let controller = settings.controller.clone().ok_or_else(|| {
                 gst::error_msg!(gst::ResourceError::Settings, ["Controller is not defined"])
             })?;
-            info!(CAT, obj: element, "start: controller={}", controller);
+            info!(CAT, imp: self, "start: controller={}", controller);
             let keycloak_file = settings.keycloak_file.clone();
-            info!(CAT, obj: element, "start: keycloak_file={:?}", keycloak_file);
+            info!(CAT, imp: self, "start: keycloak_file={:?}", keycloak_file);
             let config = utils::create_client_config(controller, keycloak_file).map_err(|error| {
                 gst::error_msg!(gst::ResourceError::Settings, ["Failed to create Pravega client config: {}", error])
             })?;
-            trace!(CAT, obj: element, "start: config={:?}", config);
-            info!(CAT, obj: element, "start: controller_uri={}:{}", config.controller_uri.domain_name(), config.controller_uri.port());
-            info!(CAT, obj: element, "start: is_tls_enabled={}", config.is_tls_enabled);
-            info!(CAT, obj: element, "start: is_auth_enabled={}", config.is_auth_enabled);
+            trace!(CAT, imp: self, "start: config={:?}", config);
+            info!(CAT, imp: self, "start: controller_uri={}:{}", config.controller_uri.domain_name(), config.controller_uri.port());
+            info!(CAT, imp: self, "start: is_tls_enabled={}", config.is_tls_enabled);
+            info!(CAT, imp: self, "start: is_auth_enabled={}", config.is_auth_enabled);
 
             let client_factory = ClientFactory::new(config);
             let runtime = client_factory.runtime();
@@ -211,13 +209,13 @@ impl PravegaTC {
 
             // Get last checkpointed state (pts) from Pravega table.
             let persistent_state: Result<Option<(PersistentState, Version)>, TableError> = runtime.block_on(table.get(&PERSISTENT_STATE_TABLE_KEY.to_string()));
-            debug!(CAT, obj: element, "start: persistent_state={:?}", persistent_state);
+            debug!(CAT, imp: self, "start: persistent_state={:?}", persistent_state);
             let persistent_state = persistent_state.unwrap();
             match persistent_state {
                 Some((mut persistent_state, version)) => {                    
                     // Increment resume_count every time we attempt to resume.
                     persistent_state.resume_count = Some(persistent_state.resume_count.unwrap_or_default() + 1);
-                    log!(CAT, obj: element, "start: writing persistent state {:?}", persistent_state);
+                    log!(CAT, imp: self, "start: writing persistent state {:?}", persistent_state);
                     runtime.block_on(table.insert_conditionally(&PERSISTENT_STATE_TABLE_KEY.to_string(), &persistent_state, version, -1)).map_err(|error| {
                         gst::error_msg!(gst::CoreError::Failed, ["Failed to write to Pravega table: {}", error])
                     })?;
@@ -230,25 +228,25 @@ impl PravegaTC {
                     let initial_skip_time_delta = 2 * SECOND;
                     let (resume_time_delta, start_mode) = if resume_count >= max_exact_resume_count + 1 {
                         let resume_time_delta = u64::pow(2, u32::min(24, (resume_count - max_exact_resume_count - 1) as u32)) * initial_skip_time_delta;
-                        warning!(CAT, obj: element, "start: Skipping {:?} due to {} resume attempts", resume_time_delta, resume_count);
+                        warning!(CAT, imp: self, "start: Skipping {:?} due to {} resume attempts", resume_time_delta, resume_count);
                         (resume_time_delta, "timestamp")
                     } else {
                         (0 * SECOND, "timestamp-exact")
                     };
                     let resume_at_pts: PravegaTimestamp = original_resume_at_pts + resume_time_delta;
                     
-                    info!(CAT, obj: element, "start: Resuming at PTS {:?}", resume_at_pts);
-                    let pipeline = element.parent().unwrap().downcast::<gst::Pipeline>().unwrap();
+                    info!(CAT, imp: self, "start: Resuming at PTS {:?}", resume_at_pts);
+                    let pipeline = self.obj().parent().unwrap().downcast::<gst::Pipeline>().unwrap();
                     let children = pipeline.children();
                     // Find all pravegasrc elements and set start-timestamp property.
                     let mut elements_found = false;
                     for child in children {
-                        trace!(CAT, obj: element, "start: child={:?}", child);
+                        trace!(CAT, imp: self, "start: child={:?}", child);
                         let child_type_name = child.type_().name();
                         if child_type_name == "PravegaSrc" {
-                            debug!(CAT, obj: element, "start: Setting start-timestamp of element {:?}", child.name());
+                            debug!(CAT, imp: self, "start: Setting start-timestamp of element {:?}", child.name());
                             child.set_property_from_str("start-mode", start_mode);
-                            child.set_property("start-timestamp", &resume_at_pts.nanoseconds().unwrap()).unwrap();
+                            child.set_property("start-timestamp", &resume_at_pts.nanoseconds().unwrap());
                             elements_found = true;
                         }
                     }
@@ -257,7 +255,7 @@ impl PravegaTC {
                     }
                 },
                 None => {
-                    info!(CAT, obj: element, "start: No persistent state found.");
+                    info!(CAT, imp: self, "start: No persistent state found.");
                 },
             }
 
@@ -265,21 +263,20 @@ impl PravegaTC {
                 state: StartedState {
                     client_factory,
                     table: Arc::new(Mutex::new(table)),
-                    last_recorded_pts: ClockTime::none(),
+                    last_recorded_pts: ClockTime::NONE,
                     final_resume_at_pts: PravegaTimestamp::none(),
                 },
             };
-            info!(CAT, obj: element, "start: Started");
+            info!(CAT, imp: self, "start: Started");
             Ok(())
         })();
-        debug!(CAT, obj: element, "start: END: result={:?}", result);
+        debug!(CAT, imp: self, "start: END: result={:?}", result);
         result
     }
 
     fn sink_chain(
         &self,
         pad: &gst::Pad,
-        element: &super::PravegaTC,
         buffer: gst::Buffer,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
         trace!(CAT, obj: pad, "sink_chain: Handling buffer {:?}", buffer);
@@ -313,50 +310,54 @@ impl PravegaTC {
 
         if buffer_pts.is_some() {
             // If duration of the buffer is reported as 0, we handle it as a 1 nanosecond duration.
-            let duration = cmp::max(1, buffer_duration.nanoseconds().unwrap_or_default());
+            let duration = cmp::max(1, buffer_duration.unwrap_or_default().nseconds());
             let resume_at_pts = clocktime_to_pravega(buffer_pts) + duration * NSECOND;            
             state.final_resume_at_pts = resume_at_pts;
 
             // Periodically write buffer PTS to persistent state.
-            if state.last_recorded_pts.is_none() || state.last_recorded_pts + record_period <= buffer_pts {
-                debug!(CAT, obj: element, "sink_chain: writing persistent state to resume at {:?}", resume_at_pts);
+            let end_pts = match (state.last_recorded_pts, Some(record_period)) {
+                (Some(x), Some(y)) => Some(x + y),
+                _ => None,
+            };
+            if state.last_recorded_pts.is_none() || end_pts <= buffer_pts {
+                debug!(CAT, imp: self, "sink_chain: writing persistent state to resume at {:?}", resume_at_pts);
                 let runtime = state.client_factory.runtime();
                 let table = state.table.lock().unwrap();
                 let persistent_state = PersistentState {
                     resume_at_pts: resume_at_pts.nanoseconds().unwrap(),
                     resume_count: Some(0),
                 };
-                log!(CAT, obj: element, "sink_chain: writing persistent state {:?}", persistent_state);
+                log!(CAT, imp: self, "sink_chain: writing persistent state {:?}", persistent_state);
                 runtime.block_on(table.insert(&PERSISTENT_STATE_TABLE_KEY.to_string(), &persistent_state, -1)).map_err(|error| {
-                    gst::element_error!(element, gst::CoreError::Failed, ["Failed to write to Pravega table: {}", error]);
+                    gst::element_imp_error!(self, gst::CoreError::Failed, ["Failed to write to Pravega table: {}", error]);
                     gst::FlowError::Error
                 })?;
                 state.last_recorded_pts = buffer_pts;
             }
         }
 
-        trace!(CAT, obj: element, "sink_chain: END: state={:?}", state);
+        trace!(CAT, imp: self, "sink_chain: END: state={:?}", state);
         Ok(gst::FlowSuccess::Ok)
     }
 
-    fn sink_event(&self, _pad: &gst::Pad, _element: &super::PravegaTC, event: gst::Event) -> bool {
+    fn sink_event(&self, _pad: &gst::Pad, event: gst::Event) -> bool {
         self.srcpad.push_event(event)
     }
 
-    fn sink_query(&self, _pad: &gst::Pad, _element: &super::PravegaTC, query: &mut gst::QueryRef) -> bool {
+    fn sink_query(&self, _pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         self.srcpad.peer_query(query)
     }
 
-    fn src_event(&self, _pad: &gst::Pad, _element: &super::PravegaTC, event: gst::Event) -> bool {
+    fn src_event(&self, _pad: &gst::Pad, event: gst::Event) -> bool {
         self.sinkpad.push_event(event)
     }
 
-    fn src_query(&self, _pad: &gst::Pad, _element: &super::PravegaTC, query: &mut gst::QueryRef) -> bool {
+    fn src_query(&self, _pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         self.sinkpad.peer_query(query)
     }
 
-    fn stop(&self, element: &super::PravegaTC) -> Result<(), gst::ErrorMessage> {
-        info!(CAT, obj: element, "stop: BEGIN");
+    fn stop(&self) -> Result<(), gst::ErrorMessage> {
+        info!(CAT, imp: self, "stop: BEGIN");
         let result = (|| {
             let mut st = self.state.lock().unwrap();
             let state = match *st {
@@ -369,7 +370,7 @@ impl PravegaTC {
                 }
             };
             if state.final_resume_at_pts.is_some() {
-                info!(CAT, obj: element, "stop: writing final persistent state to resume at {:?}", state.final_resume_at_pts);
+                info!(CAT, imp: self, "stop: writing final persistent state to resume at {:?}", state.final_resume_at_pts);
                 let runtime = state.client_factory.runtime();
                 let table = state.table.lock().unwrap();
                 let persistent_state = PersistentState {
@@ -383,7 +384,7 @@ impl PravegaTC {
             *st = State::Stopped;
             Ok(())
         })();
-        info!(CAT, obj: element, "stop: END: result={:?}", result);
+        info!(CAT, imp: self, "stop: END: result={:?}", result);
         result
     }
 }
@@ -398,44 +399,44 @@ impl ObjectSubclass for PravegaTC {
         pravega_video::tracing::init();
 
         let templ = klass.pad_template("sink").unwrap();
-        let sinkpad = gst::Pad::builder_with_template(&templ, Some("sink"))
+        let sinkpad = gst::Pad::builder_from_template(&templ)
             .chain_function(|pad, parent, buffer| {
                 PravegaTC::catch_panic_pad_function(
                     parent,
                     || Err(gst::FlowError::Error),
-                    |identity, element| identity.sink_chain(pad, element, buffer),
+                    |identity| identity.sink_chain(pad, buffer),
                 )
             })
             .event_function(|pad, parent, event| {
                 PravegaTC::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_event(pad, element, event),
+                    |identity| identity.sink_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 PravegaTC::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_query(pad, element, query),
+                    |identity| identity.sink_query(pad, query),
                 )
             })
             .build();
 
         let templ = klass.pad_template("src").unwrap();
-        let srcpad = gst::Pad::builder_with_template(&templ, Some("src"))
+        let srcpad = gst::Pad::builder_from_template(&templ)
             .event_function(|pad, parent, event| {
                 PravegaTC::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.src_event(pad, element, event),
+                    |identity| identity.src_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 PravegaTC::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.src_query(pad, element, query),
+                    |identity| identity.src_query(pad, query),
                 )
             })
             .build();
@@ -450,41 +451,37 @@ impl ObjectSubclass for PravegaTC {
 }
 
 impl ObjectImpl for PravegaTC {
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
+
+        let obj = self.obj();
         obj.add_pad(&self.sinkpad).unwrap();
         obj.add_pad(&self.srcpad).unwrap();
     }
 
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| { vec![
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_TABLE,
-                "Table",
-                "The scope and table name that will be used for storing the persistent state. The format must be 'scope/table'.",
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_CONTROLLER,
-                "Controller",
-                format!("Pravega controller. \
+            glib::ParamSpecString::builder(PROPERTY_NAME_TABLE)
+                .nick("Table")
+                .blurb("The scope and table name that will be used for storing the persistent state. The format must be 'scope/table'.")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_CONTROLLER)
+                .nick("Controller")
+                .blurb(format!("Pravega controller. \
                     If not specified, this will use the value of the environment variable {}. \
                     If that is empty, it will use the default of {}.",
-                    utils::ENV_PRAVEGA_CONTROLLER_URI, utils::DEFAULT_PRAVEGA_CONTROLLER_URI).as_str(),
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_KEYCLOAK_FILE,
-                "Keycloak file",
-                format!("The filename containing the Keycloak credentials JSON. \
+                    utils::ENV_PRAVEGA_CONTROLLER_URI, utils::DEFAULT_PRAVEGA_CONTROLLER_URI).as_str())
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_KEYCLOAK_FILE)
+                .nick("Keycloak file")
+                .blurb(format!("The filename containing the Keycloak credentials JSON. \
                     If not specified, this will use the value of the environment variable {}. \
                     If that is empty, authentication will be disabled.",
-                    utils::ENV_KEYCLOAK_SERVICE_ACCOUNT_FILE).as_str(),
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
+                    utils::ENV_KEYCLOAK_SERVICE_ACCOUNT_FILE).as_str())
+                .mutable_ready()
+                .build(),
         ]});
         PROPERTIES.as_ref()
     }
@@ -492,7 +489,6 @@ impl ObjectImpl for PravegaTC {
     // TODO: On error, should set flag that will cause element to fail.
     fn set_property(
         &self,
-        obj: &Self::Type,
         _id: usize,
         value: &glib::Value,
         pspec: &glib::ParamSpec,
@@ -500,11 +496,11 @@ impl ObjectImpl for PravegaTC {
         match pspec.name() {
             PROPERTY_NAME_TABLE => {
                 let res = match value.get::<String>() {
-                    Ok(table) => self.set_table(&obj, Some(table)),
+                    Ok(table) => self.set_table(Some(table)),
                     Err(_) => unreachable!("type checked upstream"),
                 };
                 if let Err(err) = res {
-                    error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_TABLE, err);
+                    error!(CAT, imp: self, "Failed to set property `{}`: {}", PROPERTY_NAME_TABLE, err);
                 }
             },
             PROPERTY_NAME_CONTROLLER => {
@@ -515,12 +511,12 @@ impl ObjectImpl for PravegaTC {
                         } else {
                             Some(controller)
                         };
-                        self.set_controller(&obj, controller)
+                        self.set_controller(controller)
                     },
                     Err(_) => unreachable!("type checked upstream"),
                 };
                 if let Err(err) = res {
-                    error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_CONTROLLER, err);
+                    error!(CAT, imp: self, "Failed to set property `{}`: {}", PROPERTY_NAME_CONTROLLER, err);
                 }
             },
             PROPERTY_NAME_KEYCLOAK_FILE => {
@@ -537,13 +533,15 @@ impl ObjectImpl for PravegaTC {
                     Err(_) => unreachable!("type checked upstream"),
                 };
                 if let Err(err) = res {
-                    error!(CAT, obj: obj, "Failed to set property `{}`: {}", PROPERTY_NAME_KEYCLOAK_FILE, err);
+                    error!(CAT, imp: self, "Failed to set property `{}`: {}", PROPERTY_NAME_KEYCLOAK_FILE, err);
                 }
             },
         _ => unimplemented!(),
         };
     }
 }
+
+impl GstObjectImpl for PravegaTC {}
 
 impl ElementImpl for PravegaTC {
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
@@ -582,19 +580,18 @@ impl ElementImpl for PravegaTC {
 
     fn change_state(
         &self,
-        element: &Self::Type,
         transition: gst::StateChange,
     ) -> Result<gst::StateChangeSuccess, gst::StateChangeError> {
-        trace!(CAT, obj: element, "change_state: Changing state {:?}", transition);
+        trace!(CAT, imp: self, "change_state: Changing state {:?}", transition);
         match transition {
             gst::StateChange::ReadyToPaused => {
-                self.start(element).unwrap();
+                self.start().unwrap();
             },
             gst::StateChange::PausedToReady => {
-                self.stop(element).unwrap();
+                self.stop().unwrap();
             },
             _ => {}
         }
-        self.parent_change_state(element, transition)
+        self.parent_change_state(transition)
     }
 }

@@ -8,8 +8,8 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 
-use glib::subclass::prelude::*;
 use gst::ClockTime;
+use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 #[allow(unused_imports)]
@@ -91,7 +91,7 @@ impl Default for Settings {
 
 #[derive(Debug)]
 struct StartedState {
-    prev_input_pts: ClockTime,
+    prev_input_pts: Option<ClockTime>,
     prev_output_pts: PravegaTimestamp,
     pts_offset_nanos: Option<i128>,
 }
@@ -106,7 +106,7 @@ impl Default for State {
     fn default() -> State {
         State::Started {
             state: StartedState {
-                prev_input_pts: ClockTime::none(),
+                prev_input_pts: ClockTime::NONE,
                 prev_output_pts: PravegaTimestamp::none(),
                 pts_offset_nanos: None,
             }
@@ -133,7 +133,6 @@ impl TimestampCvt {
     fn sink_chain(
         &self,
         pad: &gst::Pad,
-        _element: &super::TimestampCvt,
         mut buffer: gst::Buffer,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
 
@@ -153,14 +152,14 @@ impl TimestampCvt {
         let input_pts = buffer.pts();
         let input_dts = buffer.dts();
         if input_pts.is_some() {
-            let input_nanos = input_pts.nanoseconds().unwrap();
+            let input_nanos = input_pts.unwrap().nseconds();
             // corrected_input_pts will be the TAI timestamp of the input buffer.
             let corrected_input_pts = match input_timestamp_mode {
                 InputTimestampMode::Tai => {
                     input_pts
                 },
                 InputTimestampMode::Ntp => {
-                    pravega_to_clocktime(PravegaTimestamp::from_ntp_nanoseconds(input_pts.nanoseconds()))
+                    pravega_to_clocktime(PravegaTimestamp::from_ntp_nanoseconds(input_pts.map(ClockTime::nseconds)))
                 },
                 InputTimestampMode::StartAtCurrentTime => {
                     if state.pts_offset_nanos.is_none() {
@@ -170,7 +169,7 @@ impl TimestampCvt {
                             "Input buffer PTS timestamps will be adjusted by {} nanoseconds to synchronize with the current system time.",
                             state.pts_offset_nanos.unwrap());
                         }
-                    ClockTime::from_nseconds((input_nanos as i128 + state.pts_offset_nanos.unwrap()) as u64)
+                    Some(ClockTime::from_nseconds((input_nanos as i128 + state.pts_offset_nanos.unwrap()) as u64))
                 },
                 InputTimestampMode::StartAtFixedTime => {
                     if state.pts_offset_nanos.is_none() {
@@ -179,7 +178,7 @@ impl TimestampCvt {
                             "Input buffer PTS timestamps will be adjusted by {} nanoseconds.",
                             state.pts_offset_nanos.unwrap());
                         }
-                    ClockTime::from_nseconds((input_nanos as i128 + state.pts_offset_nanos.unwrap()) as u64)
+                    Some(ClockTime::from_nseconds((input_nanos as i128 + state.pts_offset_nanos.unwrap()) as u64))
                 },
             };
             let output_pts = if state.prev_input_pts.is_some() {
@@ -188,7 +187,7 @@ impl TimestampCvt {
                     state.prev_output_pts
                 } else {
                     // PTS has changed. Calculate new output PTS.
-                    let output_pts = PravegaTimestamp::from_nanoseconds(corrected_input_pts.nseconds());
+                    let output_pts = PravegaTimestamp::from_nanoseconds(corrected_input_pts.map(ClockTime::nseconds));
                     if state.prev_output_pts < output_pts {
                         // PTS has increased normally.
                         output_pts
@@ -203,7 +202,7 @@ impl TimestampCvt {
                 }
             } else {
                 // This is our first buffer with a PTS.
-                PravegaTimestamp::from_nanoseconds(corrected_input_pts.nseconds())
+                PravegaTimestamp::from_nanoseconds(corrected_input_pts.map(ClockTime::nseconds))
             };
             let success = if output_pts.is_some() {
                 if state.prev_output_pts.is_some() && output_pts < state.prev_output_pts {
@@ -215,13 +214,13 @@ impl TimestampCvt {
                     state.prev_output_pts = output_pts;
                     let output_pts_clocktime = pravega_to_clocktime(output_pts);
                     let buffer_ref = buffer.make_mut();
-                    log!(CAT, obj: pad, "Input PTS {}, Output PTS {:?}", input_pts, output_pts);
+                    log!(CAT, obj: pad, "Input PTS {}, Output PTS {:?}", input_pts.unwrap_or_default(), output_pts);
                     buffer_ref.set_pts(output_pts_clocktime);
 
                     // Adjust DTS if it exists by the nominal PTS offset.
                     if input_dts.is_some() && state.pts_offset_nanos.is_some() {
-                        let output_dts = ClockTime::from_nseconds((input_dts.nanoseconds().unwrap() as i128 + state.pts_offset_nanos.unwrap()) as u64);
-                        log!(CAT, obj: pad, "Input DTS {}, Output DTS {:?}", input_dts, output_dts);
+                        let output_dts = ClockTime::from_nseconds((input_dts.unwrap().nseconds() as i128 + state.pts_offset_nanos.unwrap()) as u64);
+                        log!(CAT, obj: pad, "Input DTS {}, Output DTS {:?}", input_dts.unwrap_or_default(), output_dts);
                         buffer_ref.set_dts(output_dts);
                     }
 
@@ -232,8 +231,8 @@ impl TimestampCvt {
                 // This will be logged as a warning.
                 // If this persists for more than 15 seconds, the pipeline will stop with an error.
                 warning!(CAT, obj: pad, "Dropping buffer because input PTS {} cannot be converted to the range {:?} to {:?}.",
-                    input_pts, PravegaTimestamp::MIN, PravegaTimestamp::MAX);
-                if input_pts > 15 * gstreamer_sys::GST_SECOND {
+                    input_pts.unwrap_or_default(), PravegaTimestamp::MIN, PravegaTimestamp::MAX);
+                if input_pts > Some(ClockTime::from_seconds(15)) {
                     error!(CAT, obj: pad,
                         "Input buffers do not have valid PTS timestamps. \
                         If you are using an RTSP source, this may occur if the RTSP source is not sending RTCP Sender Reports. \
@@ -254,7 +253,7 @@ impl TimestampCvt {
         }
     }
 
-    fn sink_event(&self, pad: &gst::Pad, _element: &super::TimestampCvt, event: gst::Event) -> bool {
+    fn sink_event(&self, pad: &gst::Pad, event: gst::Event) -> bool {
         debug!(CAT, obj: pad, "sink_event: event={:?}", event);
         match event.view() {
             gst::EventView::Segment(segment) => {
@@ -271,15 +270,15 @@ impl TimestampCvt {
         }        
     }
 
-    fn sink_query(&self, _pad: &gst::Pad, _element: &super::TimestampCvt, query: &mut gst::QueryRef) -> bool {
+    fn sink_query(&self, _pad: &gst::Pad,  query: &mut gst::QueryRef) -> bool {
         self.srcpad.peer_query(query)
     }
 
-    fn src_event(&self, _pad: &gst::Pad, _element: &super::TimestampCvt, event: gst::Event) -> bool {
+    fn src_event(&self, _pad: &gst::Pad, event: gst::Event) -> bool {
         self.sinkpad.push_event(event)
     }
 
-    fn src_query(&self, _pad: &gst::Pad, _element: &super::TimestampCvt, query: &mut gst::QueryRef) -> bool {
+    fn src_query(&self, _pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         self.sinkpad.peer_query(query)
     }
 }
@@ -292,44 +291,44 @@ impl ObjectSubclass for TimestampCvt {
 
     fn with_class(klass: &Self::Class) -> Self {
         let templ = klass.pad_template("sink").unwrap();
-        let sinkpad = gst::Pad::builder_with_template(&templ, Some("sink"))
+        let sinkpad = gst::Pad::builder_from_template(&templ)
             .chain_function(|pad, parent, buffer| {
                 TimestampCvt::catch_panic_pad_function(
                     parent,
                     || Err(gst::FlowError::Error),
-                    |identity, element| identity.sink_chain(pad, element, buffer),
+                    |identity| identity.sink_chain(pad, buffer),
                 )
             })
             .event_function(|pad, parent, event| {
                 TimestampCvt::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_event(pad, element, event),
+                    |identity| identity.sink_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 TimestampCvt::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_query(pad, element, query),
+                    |identity| identity.sink_query(pad, query),
                 )
             })
             .build();
 
         let templ = klass.pad_template("src").unwrap();
-        let srcpad = gst::Pad::builder_with_template(&templ, Some("src"))
+        let srcpad = gst::Pad::builder_from_template(&templ)
         .event_function(|pad, parent, event| {
             TimestampCvt::catch_panic_pad_function(
                 parent,
                 || false,
-                |identity, element| identity.src_event(pad, element, event),
+                |identity| identity.src_event(pad, event),
             )
         })
         .query_function(|pad, parent, query| {
             TimestampCvt::catch_panic_pad_function(
                 parent,
                 || false,
-                |identity, element| identity.src_query(pad, element, query),
+                |identity| identity.src_query(pad, query),
             )
         })
         .build();
@@ -344,41 +343,38 @@ impl ObjectSubclass for TimestampCvt {
 }
 
 impl ObjectImpl for TimestampCvt {
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
+
+        let obj = self.obj();
         obj.add_pad(&self.sinkpad).unwrap();
         obj.add_pad(&self.srcpad).unwrap();
     }
 
     fn properties() -> &'static [glib::ParamSpec] {
         static PROPERTIES: Lazy<Vec<glib::ParamSpec>> = Lazy::new(|| { vec![
-            glib::ParamSpec::new_enum(
-                PROPERTY_NAME_INPUT_TIMESTAMP_MODE,
-                "Input timestamp mode",
-                "Timestamp mode used by the input",
-                InputTimestampMode::static_type(),
-                DEFAULT_INPUT_TIMESTAMP_MODE as i32,
-                glib::ParamFlags::WRITABLE,
-            ),
-            glib::ParamSpec::new_string(
-                PROPERTY_NAME_START_UTC,
-                "Start UTC",
-                "If input-timestamp-mode=start-at-fixed-time, this is the timestamp at which to start, \
-                in RFC 3339 format. For example: 2021-12-28T23:41:45.691Z",
-                None,
-                glib::ParamFlags::WRITABLE,
-            ),
+            glib::ParamSpecEnum::builder_with_default(PROPERTY_NAME_INPUT_TIMESTAMP_MODE, DEFAULT_INPUT_TIMESTAMP_MODE)
+                .nick("Input timestamp mode")
+                .blurb("Timestamp mode used by the input")
+                .mutable_ready()
+                .build(),
+            glib::ParamSpecString::builder(PROPERTY_NAME_START_UTC)
+                .nick("Start UTC")
+                .blurb("If input-timestamp-mode=start-at-fixed-time, this is the timestamp at which to start, \
+                in RFC 3339 format. For example: 2021-12-28T23:41:45.691Z")
+                .mutable_ready()
+                .build(),
         ]});
         PROPERTIES.as_ref()
     }
 
     fn set_property(
         &self,
-        obj: &Self::Type,
         _id: usize,
         value: &glib::Value,
         pspec: &glib::ParamSpec,
     ) {
+        let obj = self.obj();
         match pspec.name() {
             PROPERTY_NAME_INPUT_TIMESTAMP_MODE => {
                 let res: Result<(), glib::Error> = match value.get::<InputTimestampMode>() {
@@ -410,6 +406,8 @@ impl ObjectImpl for TimestampCvt {
         };
     }
 }
+
+impl GstObjectImpl for TimestampCvt {}
 
 impl ElementImpl for TimestampCvt {
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {

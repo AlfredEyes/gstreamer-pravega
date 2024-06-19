@@ -12,12 +12,13 @@ use gst::ClockTime;
 use pravega_video::timestamp::{PravegaTimestamp};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn clocktime_to_pravega(t: ClockTime) -> PravegaTimestamp {
-    PravegaTimestamp::from_nanoseconds(t.nanoseconds())
+
+pub fn clocktime_to_pravega(t: Option<ClockTime>) -> PravegaTimestamp {
+    PravegaTimestamp::from_nanoseconds(t.map(ClockTime::nseconds))
 }
 
-pub fn pravega_to_clocktime(t: PravegaTimestamp) -> ClockTime {
-    ClockTime(t.nanoseconds())
+pub fn pravega_to_clocktime(t: PravegaTimestamp) -> Option<ClockTime> {
+    t.nanoseconds().map(ClockTime::from_nseconds)
 }
 
 /// Returns the current time as the number of nanoseconds since the NTP epoch, not including leap seconds.

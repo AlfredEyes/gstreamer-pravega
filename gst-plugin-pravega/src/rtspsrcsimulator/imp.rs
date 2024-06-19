@@ -11,8 +11,8 @@
 // RTSP Source Simulator can be used as part of a pipeline to simulate rtspsrc.
 // TODO: This is not yet included in lib.rs because it may not be useful.
 
-use glib::subclass::prelude::*;
 use gst::ClockTime;
+use gst::glib;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
 use gst::{debug, error, info, log, trace};
@@ -205,7 +205,7 @@ impl ObjectSubclass for RtspSrcSimulator {
         //
         // Details about what each function is good for is next to each function definition
         let templ = klass.get_pad_template("sink").unwrap();
-        let sinkpad = gst::Pad::builder_with_template(&templ, Some("sink"))
+        let sinkpad = gst::Pad::builder_from_template(&templ)
             .chain_function(|pad, parent, buffer| {
                 RtspSrcSimulator::catch_panic_pad_function(
                     parent,
@@ -230,7 +230,7 @@ impl ObjectSubclass for RtspSrcSimulator {
             .build();
 
         let templ = klass.get_pad_template("src").unwrap();
-        let srcpad = gst::Pad::builder_with_template(&templ, Some("src"))
+        let srcpad = gst::Pad::builder_from_template(&templ)
             .event_function(|pad, parent, event| {
                 RtspSrcSimulator::catch_panic_pad_function(
                     parent,

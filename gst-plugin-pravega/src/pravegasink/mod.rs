@@ -8,7 +8,8 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 
-use glib::prelude::*;
+use gst::glib;
+use gst::prelude::*;
 
 mod imp;
 
@@ -29,7 +30,7 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     gst::Element::register(
         Some(plugin),
         "pravegasink",
-        gst::Rank::None,
+        gst::Rank::NONE,
         PravegaSink::static_type(),
     )
 }

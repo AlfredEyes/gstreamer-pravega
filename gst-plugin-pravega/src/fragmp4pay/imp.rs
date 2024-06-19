@@ -8,7 +8,7 @@
 // http://www.apache.org/licenses/LICENSE-2.0
 //
 
-use glib::subclass::prelude::*;
+use gst::glib;
 use gst::ClockTime;
 use gst::prelude::*;
 use gst::subclass::prelude::*;
@@ -34,6 +34,8 @@ const ATOM_TYPE_FTYPE: u32 = 1718909296;
 const ATOM_TYPE_MOOV: u32 = 1836019574;
 const ATOM_TYPE_MOOF: u32 = 1836019558;
 const ATOM_TYPE_MDAT: u32 = 1835295092;
+
+const BUFFER_OFFSET_NONE: u64 = 18446744073709551615;
 
 #[derive(Debug)]
 struct Mp4Atom {
@@ -107,11 +109,11 @@ struct StartedState {
     moof_atom: Option<Mp4Atom>,
     // Below members that track current fragment (moof, mdat).
     /// Minimum PTS in fragment.
-    fragment_pts: ClockTime,
+    fragment_pts: Option<ClockTime>,
     /// Minimum DTS in fragment.
-    fragment_dts: ClockTime,
+    fragment_dts: Option<ClockTime>,
     /// Maximum PTS + duration in fragment.
-    fragment_max_pts_plus_duration: ClockTime,
+    fragment_max_pts_plus_duration: Option<ClockTime>,
     /// Minimum offset in fragment.
     fragment_offset: Option<u64>,
     /// Maximum offset_end in fragment.
@@ -133,9 +135,9 @@ impl Default for State {
                 ftype_atom: None,
                 moov_atom: None,
                 moof_atom: None,
-                fragment_pts: ClockTime::none(),
-                fragment_dts: ClockTime::none(),
-                fragment_max_pts_plus_duration: ClockTime::none(),
+                fragment_pts: ClockTime::NONE,
+                fragment_dts: ClockTime::NONE,
+                fragment_max_pts_plus_duration: ClockTime::NONE,
                 fragment_offset: None,
                 fragment_offset_end: None,
                 fragment_buffer_flags: gst::BufferFlags::DELTA_UNIT,
@@ -162,7 +164,6 @@ impl FragMp4Pay {
     fn sink_chain(
         &self,
         pad: &gst::Pad,
-        element: &super::FragMp4Pay,
         buffer: gst::Buffer,
     ) -> Result<gst::FlowSuccess, gst::FlowError> {
         log!(CAT, obj: pad, "Handling buffer {:?}", buffer);
@@ -177,7 +178,7 @@ impl FragMp4Pay {
         };
 
         let map = buffer.map_readable().map_err(|_| {
-            gst::element_error!(element, gst::CoreError::Failed, ["Failed to map buffer"]);
+            gst::element_imp_error!(self, gst::CoreError::Failed, ["Failed to map buffer"]);
             gst::FlowError::Error
         })?;
         let input_buf = map.as_ref();
@@ -194,14 +195,17 @@ impl FragMp4Pay {
             if state.fragment_dts.is_none() || state.fragment_dts > buffer.dts() {
                 state.fragment_dts = buffer.dts();
             }
-            let pts_plus_duration = buffer.pts() + buffer.duration();
+            let pts_plus_duration = match (buffer.pts(), buffer.duration()) {
+                (Some(x), Some(y)) => Some(x + y),
+                _ => None,
+            };
             if state.fragment_max_pts_plus_duration.is_none() || state.fragment_max_pts_plus_duration < pts_plus_duration {
                 state.fragment_max_pts_plus_duration = pts_plus_duration;
             }
-            if buffer.offset() != gstreamer_sys::GST_BUFFER_OFFSET_NONE && (state.fragment_offset.is_none() || state.fragment_offset.unwrap() > buffer.offset()) {
+            if buffer.offset() != BUFFER_OFFSET_NONE && (state.fragment_offset.is_none() || state.fragment_offset.unwrap() > buffer.offset()) {
                 state.fragment_offset = Some(buffer.offset());
             }
-            if buffer.offset_end() != gstreamer_sys::GST_BUFFER_OFFSET_NONE && (state.fragment_offset_end.is_none() || state.fragment_offset_end.unwrap() < buffer.offset_end()) {
+            if buffer.offset_end() != BUFFER_OFFSET_NONE && (state.fragment_offset_end.is_none() || state.fragment_offset_end.unwrap() < buffer.offset_end()) {
                 state.fragment_offset_end = Some(buffer.offset_end());
             }
             if state.fragment_buffer_flags.contains(gst::BufferFlags::DELTA_UNIT) && !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT) {
@@ -248,10 +252,13 @@ impl FragMp4Pay {
                                         let buffer_ref = gst_buffer.get_mut().unwrap();
                                         buffer_ref.set_pts(state.fragment_pts);
                                         buffer_ref.set_dts(state.fragment_dts);
-                                        let duration = state.fragment_max_pts_plus_duration - state.fragment_pts;
+                                        let duration = match (state.fragment_max_pts_plus_duration, state.fragment_pts) {
+                                            (Some(x), Some(y)) => Some(x - y),
+                                            _ => None,
+                                        };
                                         buffer_ref.set_duration(duration);
-                                        buffer_ref.set_offset(state.fragment_offset.unwrap_or(gstreamer_sys::GST_BUFFER_OFFSET_NONE));
-                                        buffer_ref.set_offset_end(state.fragment_offset_end.unwrap_or(gstreamer_sys::GST_BUFFER_OFFSET_NONE));
+                                        buffer_ref.set_offset(state.fragment_offset.unwrap_or(BUFFER_OFFSET_NONE));
+                                        buffer_ref.set_offset_end(state.fragment_offset_end.unwrap_or(BUFFER_OFFSET_NONE));
                                         buffer_ref.set_flags(state.fragment_buffer_flags);
                                         let mut buffer_map = buffer_ref.map_writable().unwrap();
                                         let slice = buffer_map.as_mut_slice();
@@ -269,9 +276,9 @@ impl FragMp4Pay {
                                         assert_eq!(pos, output_buf_len);
                                     }
                                     // Clear fragment variables.
-                                    state.fragment_pts = ClockTime::none();
-                                    state.fragment_dts = ClockTime::none();
-                                    state.fragment_max_pts_plus_duration = ClockTime::none();
+                                    state.fragment_pts = ClockTime::NONE;
+                                    state.fragment_dts = ClockTime::NONE;
+                                    state.fragment_max_pts_plus_duration = ClockTime::NONE;
                                     state.fragment_offset = None;
                                     state.fragment_offset_end = None;
                                     state.fragment_buffer_flags = gst::BufferFlags::DELTA_UNIT;
@@ -292,23 +299,23 @@ impl FragMp4Pay {
                 None => break,
             }
         };
-        trace!(CAT, obj: element, "sink_chain: END: state={:?}", state);
+        trace!(CAT, imp: self, "sink_chain: END: state={:?}", state);
         Ok(gst::FlowSuccess::Ok)
     }
 
-    fn sink_event(&self, _pad: &gst::Pad, _element: &super::FragMp4Pay, event: gst::Event) -> bool {
+    fn sink_event(&self, _pad: &gst::Pad, event: gst::Event) -> bool {
         self.srcpad.push_event(event)
     }
 
-    fn sink_query(&self, _pad: &gst::Pad, _element: &super::FragMp4Pay, query: &mut gst::QueryRef) -> bool {
+    fn sink_query(&self, _pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         self.srcpad.peer_query(query)
     }
 
-    fn src_event(&self, _pad: &gst::Pad, _element: &super::FragMp4Pay, event: gst::Event) -> bool {
+    fn src_event(&self, _pad: &gst::Pad, event: gst::Event) -> bool {
         self.sinkpad.push_event(event)
     }
 
-    fn src_query(&self, _pad: &gst::Pad, _element: &super::FragMp4Pay, query: &mut gst::QueryRef) -> bool {
+    fn src_query(&self, _pad: &gst::Pad, query: &mut gst::QueryRef) -> bool {
         self.sinkpad.peer_query(query)
     }
 }
@@ -321,44 +328,44 @@ impl ObjectSubclass for FragMp4Pay {
 
     fn with_class(klass: &Self::Class) -> Self {
         let templ = klass.pad_template("sink").unwrap();
-        let sinkpad = gst::Pad::builder_with_template(&templ, Some("sink"))
+        let sinkpad = gst::Pad::builder_from_template(&templ)
             .chain_function(|pad, parent, buffer| {
                 FragMp4Pay::catch_panic_pad_function(
                     parent,
                     || Err(gst::FlowError::Error),
-                    |identity, element| identity.sink_chain(pad, element, buffer),
+                    |identity| identity.sink_chain(pad, buffer),
                 )
             })
             .event_function(|pad, parent, event| {
                 FragMp4Pay::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_event(pad, element, event),
+                    |identity| identity.sink_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 FragMp4Pay::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.sink_query(pad, element, query),
+                    |identity| identity.sink_query(pad, query),
                 )
             })
             .build();
 
         let templ = klass.pad_template("src").unwrap();
-        let srcpad = gst::Pad::builder_with_template(&templ, Some("src"))
+        let srcpad = gst::Pad::builder_from_template(&templ)
             .event_function(|pad, parent, event| {
                 FragMp4Pay::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.src_event(pad, element, event),
+                    |identity| identity.src_event(pad, event),
                 )
             })
             .query_function(|pad, parent, query| {
                 FragMp4Pay::catch_panic_pad_function(
                     parent,
                     || false,
-                    |identity, element| identity.src_query(pad, element, query),
+                    |identity| identity.src_query(pad, query),
                 )
             })
             .build();
@@ -372,12 +379,16 @@ impl ObjectSubclass for FragMp4Pay {
 }
 
 impl ObjectImpl for FragMp4Pay {
-    fn constructed(&self, obj: &Self::Type) {
-        self.parent_constructed(obj);
+    fn constructed(&self) {
+        self.parent_constructed();
+
+        let obj = self.obj();
         obj.add_pad(&self.sinkpad).unwrap();
         obj.add_pad(&self.srcpad).unwrap();
     }
 }
+
+impl GstObjectImpl for FragMp4Pay {}
 
 impl ElementImpl for FragMp4Pay {
     fn metadata() -> Option<&'static gst::subclass::ElementMetadata> {
